@@ -63,11 +63,11 @@ def parse_args():
         default=16,
         help='training batch size, default 16')
     
-    parser.add_argument(
-        '--num_classes',
-        type=int,
-        default=2,
-        help='number of classes in dataset, default: 40')
+    # parser.add_argument(
+    #     '--num_classes',
+    #     type=int,
+    #     default=2,
+    #     help='number of classes in dataset, default: 40')
     parser.add_argument(
         '--lr',
         type=float,
@@ -127,6 +127,54 @@ def parse_args():
     args = parser.parse_args()
     return args
 
+def save_vars(executor, dirname, program=None, vars=None):
+    """
+    Temporary resolution for Win save variables compatability.
+
+    """
+
+    save_program = fluid.Program()
+    save_block = save_program.global_block()
+
+    for each_var in vars:
+        # NOTE: don't save the variable which type is RAW
+        if each_var.type == fluid.core.VarDesc.VarType.RAW:
+            continue
+        new_var = save_block.create_var(
+            name=each_var.name,
+            shape=each_var.shape,
+            dtype=each_var.dtype,
+            type=each_var.type,
+            lod_level=each_var.lod_level,
+            persistable=True)
+        file_path = os.path.join(dirname, new_var.name)
+        file_path = os.path.normpath(file_path)
+        save_block.append_op(
+            type='save',
+            inputs={'X': [new_var]},
+            outputs={},
+            attrs={'file_path': file_path})
+
+    executor.run(save_program)
+
+
+def save_checkpoint(exe, program, path):
+    """
+    Save checkpoint for evaluation or resume training
+    """
+    ckpt_dir = path
+    print("Save model checkpoint to {}".format(ckpt_dir))
+    if not os.path.isdir(ckpt_dir):
+        os.makedirs(ckpt_dir)
+
+    save_vars(
+        exe,
+        ckpt_dir,
+        program,
+        vars=list(filter(fluid.io.is_persistable, program.list_vars())))
+
+    return ckpt_dir
+
 
 def train():
     """main train"""
@@ -145,7 +193,11 @@ def train():
     # pdb.set_trace()
     conf = core.init_config(args.conf)
     paths = core.init_training_paths(args.conf)
-    
+
+    # get reader and anchor
+    m3drpn_reader = M3drpnReader(conf, args.data_dir)
+    train_reader = m3drpn_reader.get_reader(conf.batch_size, mode='train')
+    generate_anchors(conf, m3drpn_reader.data['train'], paths.output)
     
     # build model
     if args.enable_ce:
@@ -157,8 +209,7 @@ def train():
     train_prog = fluid.Program()
     with fluid.program_guard(train_prog, startup):
         with fluid.unique_name.guard():
-            # get model
-            train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output)
+            
             # get train_loader
             #image_shape = args.image_shape
             feed_image = fluid.data(
@@ -174,8 +225,12 @@ def train():
                 capacity=capacity,
                 use_double_buffer=True,
                 iterable=False)
+            # get model
+            train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output)
             # get train outputs
-            train_out = train_model.net(feed_image, class_dim=args.num_classes)  # TODO rpn
+            #train_out = train_model.net(feed_image, class_dim=args.num_classes)  # TODO rpn
+            
+            cls, prob, bbox_2d, bbox_3d, feat_size = train_model.m3d_rpn(feed_image, conf, args.backbone, 'train')  # TODO rpn 
             # train_feeds = train_model.get_feeds()
             # train_loader = train_model.get_loader()
             # train_outputs = train_model.get_outputs()
@@ -218,6 +273,42 @@ def train():
             assert os.path.exists("{}.pdopt".format(args.resume)), \
                     "Given resume optimizer state {}.pdopt not exist.".format(args.resume)
         fluid.load(train_prog, args.resume, exe)
+        
+    # pretrain 
+    if conf.pretrained:
+        if os.path.exists(conf.pretrained):
+            print('Pretrained model dir: ', conf.pretrained)
+            load_vars, load_fail_vars = core.load_vars(train_prog, conf.pretrained)
+
+            # loc
+            program_state = fluid.load_program_state(conf.pretrained)
+            loc_dict = {}
+            for key in program_state.keys():
+                if key.startswith("rpn_"):
+                    loc_dict[key+"_loc"] = np.repeat(program_state[key], conf.bins, axis=0)
+            fluid.set_program_state(train_prog, loc_dict)
+            for key in loc_dict.keys():
+                print("Parameter[{}] loaded sucessfully!".format(key))
+            
+            # matched   
+            fluid.io.load_vars(
+                exe, dirname=conf.pretrained, vars=load_vars)
+            for var in load_vars:
+                print("Parameter[{}] loaded sucessfully!".format(var.name))
+            
+            # not matched
+            for var in load_fail_vars:
+                if not var.name.endswith("_loc"):
+                    print(
+                    "Parameter[{}] don't exist or shape does not match current network, skip"
+                    " to load it.".format(var.name))
+            print("{}/{} pretrained parameters loaded successfully!".format(
+                len(load_vars),
+                len(load_vars) + len(load_fail_vars)))
+        else:
+            print(
+            'Pretrained model dir {} not exists, training from scratch...'.
+            format(conf.pretrained))
 
     build_strategy = fluid.BuildStrategy()
     build_strategy.memory_optimize = False
@@ -235,10 +326,7 @@ def train():
         fluid.save(prog, path)
 
 
-    # get reader
-    m3drpn_reader = M3drpnReader(conf, args.data_dir)
-    train_reader = m3drpn_reader.get_reader(conf.batch_size, mode='train')
-    generate_anchors(conf, m3drpn_reader.data['train'], paths.output)    
+    # set loader
     train_loader.set_sample_list_generator(train_reader, place)
     
     # modelnet_reader = ModelNet40ClsReader(args.data_dir, mode='test', transforms=None)
@@ -257,9 +345,10 @@ def train():
             train_iter = 0
             
             while True:
-                train_outs = exe.run(train_compile_prog, fetch_list=[train_out])  # TODO
+                train_outs = exe.run(train_compile_prog, fetch_list=[cls, prob, bbox_2d, bbox_3d])  # , feat_size TODO loss
                 train_iter += 1
                 print("epoch {:d}, step {:d}".format(epoch_id, train_iter))
+                save_checkpoint(exe, train_prog, os.path.join(args.save_dir, str(epoch_id)))
         except fluid.core.EOFException:
             print("fluid.core.EOFException")
         finally:

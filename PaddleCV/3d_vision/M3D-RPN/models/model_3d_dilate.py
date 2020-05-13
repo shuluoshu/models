@@ -1,170 +1,170 @@
 """
 model_3d_dilate
 """
-#import torch.nn as nn
-#from torchvision import models
+
 from lib.rpn_util import *
 from models.backbone.densenet import DenseNet121 
 from models.backbone.resnet import ResNet101 
+import paddle.fluid as fluid
+from paddle.fluid.param_attr import ParamAttr
 
-#import torch
+def rpn_module(input, conf, phase):
+    # settings
+    num_classes = len(conf['lbls']) + 1
+    num_anchors = conf['anchors'].shape[0]
+    
+    prop_feats = fluid.layers.conv2d(
+        input=input,
+        num_filters=512,
+        filter_size=3,
+        padding=1,
+        act='relu',
+        param_attr=ParamAttr(name='rpn_prop_feats_weights'),
+        bias_attr=ParamAttr(name='rpn_prop_feats_bias'))
 
+    # outputs
+    cls = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_classes*num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_cls_weights'),
+        bias_attr=ParamAttr(name='rpn_cls_bias'))
 
-# def dilate_layer(layer, val):
+    # bbox 2d
+    bbox_x = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_x_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_x_bias'))
 
-#     layer.dilation = val
-#     layer.padding = val
+    bbox_y = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_y_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_y_bias'))
 
+    bbox_w = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_w_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_w_bias'))
 
-# class RPN(nn.Module):
+    bbox_h = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_h_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_h_bias'))
+    
+    # bbox 3d
+    bbox_x3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_x3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_x3d_bias'))
 
+    bbox_y3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_y3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_y3d_bias'))
 
-#     def __init__(self, phase, base, conf):
-#         super(RPN, self).__init__()
+    bbox_z3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_z3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_z3d_bias'))
 
-#         self.base = base
+    bbox_w3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_w3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_w3d_bias'))
 
-#         del self.base.transition3.pool
+    bbox_h3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_h3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_h3d_bias'))
 
-#         # dilate
-#         dilate_layer(self.base.denseblock4.denselayer1.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer2.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer3.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer4.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer5.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer6.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer7.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer8.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer9.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer10.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer11.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer12.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer13.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer14.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer15.conv2, 2)
-#         dilate_layer(self.base.denseblock4.denselayer16.conv2, 2)
+    bbox_l3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_l3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_l3d_bias'))
 
-#         # settings
-#         self.phase = phase
-#         self.num_classes = len(conf['lbls']) + 1
-#         self.num_anchors = conf['anchors'].shape[0]
+    bbox_rY3d = fluid.layers.conv2d(
+        input=prop_feats,
+        num_filters=num_anchors,
+        filter_size=1,
+        param_attr=ParamAttr(name='rpn_bbox_rY3d_weights'),
+        bias_attr=ParamAttr(name='rpn_bbox_rY3d_bias'))
 
-#         self.prop_feats = nn.Sequential(
-#             nn.Conv2d(self.base[-1].num_features, 512, 3, padding=1),
-#             nn.ReLU(inplace=True),
-#         )
+    batch_size, c, feat_h, feat_w = cls.shape
+    
+    # reshape for cross entropy
+    cls = fluid.layers.reshape(x=cls, shape=[batch_size, num_classes, feat_h * num_anchors, feat_w])
+    # score probabilities
+    prob = fluid.layers.softmax(cls, axis=1)
 
-#         # outputs
-#         self.cls = nn.Conv2d(self.prop_feats[0].out_channels, self.num_classes * self.num_anchors, 1)
+    # reshape for consistency
+    bbox_x = flatten_tensor(fluid.layers.reshape(x=bbox_x, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_y = flatten_tensor(fluid.layers.reshape(x=bbox_y, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_w = flatten_tensor(fluid.layers.reshape(x=bbox_w, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_h = flatten_tensor(fluid.layers.reshape(x=bbox_h, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
 
-#         # bbox 2d
-#         self.bbox_x = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_y = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_w = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_h = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
+    bbox_x3d = flatten_tensor(fluid.layers.reshape(x=bbox_x3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_y3d = flatten_tensor(fluid.layers.reshape(x=bbox_y3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_z3d = flatten_tensor(fluid.layers.reshape(x=bbox_z3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_w3d = flatten_tensor(fluid.layers.reshape(x=bbox_w3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_h3d = flatten_tensor(fluid.layers.reshape(x=bbox_h3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_l3d = flatten_tensor(fluid.layers.reshape(x=bbox_l3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    bbox_rY3d = flatten_tensor(fluid.layers.reshape(x=bbox_rY3d, shape=[batch_size, 1, feat_h * num_anchors, feat_w]))
+    
+    # bundle
+    bbox_2d = fluid.layers.concat(input=[bbox_x, bbox_y, bbox_w, bbox_h], axis=2)
+    bbox_3d = fluid.layers.concat(input=[bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d], axis=2)
 
-#         # bbox 3d
-#         self.bbox_x3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_y3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_z3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_w3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_h3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_l3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-#         self.bbox_rY3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
+    feat_size = [feat_h, feat_w]
+    
 
-#         self.softmax = nn.Softmax(dim=1)
+    cls = flatten_tensor(cls)
+    prob = flatten_tensor(prob)
 
-#         self.feat_stride = conf.feat_stride
-#         self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
-#         self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride, convert_tensor=True)
-#         self.rois = self.rois.type(torch.cuda.FloatTensor)
-#         self.anchors = conf.anchors
+    if phase == "train":
+        return cls, prob, bbox_2d, bbox_3d, feat_size
 
-
-#     def forward(self, x):
-
-#         batch_size = x.size(0)
-
-#         # resnet
-#         x = self.base(x)
-
-#         prop_feats = self.prop_feats(x)
-
-#         cls = self.cls(prop_feats)
-
-#         # bbox 2d
-#         bbox_x = self.bbox_x(prop_feats)
-#         bbox_y = self.bbox_y(prop_feats)
-#         bbox_w = self.bbox_w(prop_feats)
-#         bbox_h = self.bbox_h(prop_feats)
-
-#         # bbox 3d
-#         bbox_x3d = self.bbox_x3d(prop_feats)
-#         bbox_y3d = self.bbox_y3d(prop_feats)
-#         bbox_z3d = self.bbox_z3d(prop_feats)
-#         bbox_w3d = self.bbox_w3d(prop_feats)
-#         bbox_h3d = self.bbox_h3d(prop_feats)
-#         bbox_l3d = self.bbox_l3d(prop_feats)
-#         bbox_rY3d = self.bbox_rY3d(prop_feats)
-
-#         feat_h = cls.size(2)
-#         feat_w = cls.size(3)
-
-#         # reshape for cross entropy
-#         cls = cls.view(batch_size, self.num_classes, feat_h * self.num_anchors, feat_w)
-
-#         # score probabilities
-#         prob = self.softmax(cls)
-
-#         # reshape for consistency
-#         bbox_x = flatten_tensor(bbox_x.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_y = flatten_tensor(bbox_y.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_w = flatten_tensor(bbox_w.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_h = flatten_tensor(bbox_h.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-
-#         bbox_x3d = flatten_tensor(bbox_x3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_y3d = flatten_tensor(bbox_y3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_z3d = flatten_tensor(bbox_z3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_w3d = flatten_tensor(bbox_w3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_h3d = flatten_tensor(bbox_h3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_l3d = flatten_tensor(bbox_l3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-#         bbox_rY3d = flatten_tensor(bbox_rY3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-
-#         # bundle
-#         bbox_2d = torch.cat((bbox_x, bbox_y, bbox_w, bbox_h), dim=2)
-#         bbox_3d = torch.cat((bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d), dim=2)
-
-#         feat_size = [feat_h, feat_w]
-
-#         cls = flatten_tensor(cls)
-#         prob = flatten_tensor(prob)
-
-#         if self.training:
-#             return cls, prob, bbox_2d, bbox_3d, feat_size
-
-#         else:
-
-#             if self.feat_size[0] != feat_h or self.feat_size[1] != feat_w:
-#                 self.feat_size = [feat_h, feat_w]
-#                 self.rois = locate_anchors(self.anchors, self.feat_size, self.feat_stride, convert_tensor=True)
-#                 self.rois = self.rois.type(torch.cuda.FloatTensor)
-
-#             return cls, prob, bbox_2d, bbox_3d, feat_size, self.rois
-
-
-def build(conf, backbone, phase='train'):
-    """build model"""
-    train = phase.lower() == 'train'
+    else:
+        feat_stride = conf.feat_stride
+        anchors = conf.anchors
+        feat_size = calc_output_size(np.array(conf.crop_size), feat_stride)
+        rois = locate_anchors(anchors, feat_size, feat_stride) # numpy TODO
+        
+        if feat_size[0] != feat_h or feat_size[1] != feat_w:
+            feat_size = [feat_h, feat_w]
+            rois = locate_anchors(anchors, feat_size, feat_stride)
+            
+        
+        
+        return cls, prob, bbox_2d, bbox_3d, feat_size, rois    
 
     
+
+def m3d_rpn(input, conf, backbone, phase='train'):
+    # Backbone
     if backbone.lower() == "densenet121":
-        rpn_net = model = DenseNet121()
-    if backbone.lower() == "resnet101":
-        rpn_net = model = resnet101()
-
-    #rpn_net = RPN(phase, densenet121.features, conf)
-
-    # if train: rpn_net.train()
-    # else: rpn_net.eval()
-
-    return rpn_net
+        backbone_res = DenseNet121().net(input)
+    # if backbone.lower() == "resnet101":
+    #     backbone_res = ResNet101().net(input) # TODO
+    
+    # RPN
+    return rpn_module(backbone_res, conf, phase) # phase TODO

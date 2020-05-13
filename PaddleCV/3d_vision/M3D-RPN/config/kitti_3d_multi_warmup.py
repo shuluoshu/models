@@ -127,6 +127,8 @@ def Config():
     conf.bbox_3d_proj_lambda = 0.0
     
     conf.hill_climbing = True
+
+    conf.pretrained = 'pretrained_model/densenet121/'
     
     # visdom
     conf.visdom_port = 8100

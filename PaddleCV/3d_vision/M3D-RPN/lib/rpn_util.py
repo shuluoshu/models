@@ -768,16 +768,17 @@ def cluster_anchors(feat_stride, anchors, test_scale, imdb, lbls, ilbls, anchor_
 #     conf.bbox_stds = stds
 
 
-# def flatten_tensor(input):
-#     """
-#     Flattens and permutes a tensor from size
-#     [B x C x W x H] --> [B x (W x H) x C]
-#     """
-
-#     bsize = input.shape[0]
-#     csize = input.shape[1]
-
-#     return input.permute(0, 2, 3, 1).contiguous().view(bsize, -1, csize)
+def flatten_tensor(input): 
+    """
+    Flattens and permutes a tensor from size
+    [B x C x W x H] --> [B x (W x H) x C]
+    [B x C x H x W] --> [B x (W x H) x C]
+    """
+    
+    bsize,csize,h,w = input.shape
+    input_trans = fluid.layers.transpose(input, [0,2,3,1])
+    output = fluid.layers.reshape(input_trans, [bsize,h*w,csize])
+    return output
 
 
 # def unflatten_tensor(input, feat_size, anchors):
@@ -1074,91 +1075,66 @@ def determine_ignores(gts, lbls, ilbls, min_gt_vis=0.99, min_gt_h=0, max_gt_h=10
     return igns, rmvs
 
 
-# def locate_anchors(anchors, feat_size, stride, convert_tensor=False):
-#     """
-#     Spreads each anchor shape across a feature map of size feat_size spaced by a known stride.
+def locate_anchors(anchors, feat_size, stride): 
+    """
+    Spreads each anchor shape across a feature map of size feat_size spaced by a known stride.
 
-#     Args:
-#         anchors (ndarray): N x 4 array describing [x1, y1, x2, y2] displacements for N anchors
-#         feat_size (ndarray): the downsampled resolution W x H to spread anchors across
-#         stride (int): stride of a network
-#         convert_tensor (bool, optional): whether to return a torch tensor, otherwise ndarray [default=False]
+    Args:
+        anchors (ndarray): N x 4 array describing [x1, y1, x2, y2] displacements for N anchors
+        feat_size (ndarray): the downsampled resolution W x H to spread anchors across
+        stride (int): stride of a network
+        
 
-#     Returns:
-#          ndarray: 2D array = [(W x H) x 5] array consisting of [x1, y1, x2, y2, anchor_index]
-#     """
+    Returns:
+         ndarray: 2D array = [(W x H) x 5] array consisting of [x1, y1, x2, y2, anchor_index]
+    """
 
-#     # compute rois
-#     shift_x = np.array(range(0, feat_size[1], 1)) * float(stride)
-#     shift_y = np.array(range(0, feat_size[0], 1)) * float(stride)
-#     [shift_x, shift_y] = np.meshgrid(shift_x, shift_y)
+    # compute rois
+    shift_x = np.array(range(0, feat_size[1], 1)) * float(stride)
+    shift_y = np.array(range(0, feat_size[0], 1)) * float(stride)
+    [shift_x, shift_y] = np.meshgrid(shift_x, shift_y)
 
-#     rois = np.expand_dims(anchors[:, 0:4], axis=1)
-#     shift_x = np.expand_dims(shift_x, axis=0)
-#     shift_y = np.expand_dims(shift_y, axis=0)
+    rois = np.expand_dims(anchors[:, 0:4], axis=1)
+    shift_x = np.expand_dims(shift_x, axis=0)
+    shift_y = np.expand_dims(shift_y, axis=0)
 
-#     shift_x1 = shift_x + np.expand_dims(rois[:, :, 0], axis=2)
-#     shift_y1 = shift_y + np.expand_dims(rois[:, :, 1], axis=2)
-#     shift_x2 = shift_x + np.expand_dims(rois[:, :, 2], axis=2)
-#     shift_y2 = shift_y + np.expand_dims(rois[:, :, 3], axis=2)
+    shift_x1 = shift_x + np.expand_dims(rois[:, :, 0], axis=2)
+    shift_y1 = shift_y + np.expand_dims(rois[:, :, 1], axis=2)
+    shift_x2 = shift_x + np.expand_dims(rois[:, :, 2], axis=2)
+    shift_y2 = shift_y + np.expand_dims(rois[:, :, 3], axis=2)
 
-#     # compute anchor tracker
-#     anchor_tracker = np.zeros(shift_x1.shape, dtype=float)
-#     for aind in range(0, rois.shape[0]): anchor_tracker[aind, :, :] = aind
+    # compute anchor tracker
+    anchor_tracker = np.zeros(shift_x1.shape, dtype=float)
+    for aind in range(0, rois.shape[0]): anchor_tracker[aind, :, :] = aind
 
-#     stack_size = feat_size[0] * anchors.shape[0]
+    stack_size = feat_size[0] * anchors.shape[0]
 
-#     # torch and numpy MAY have different calls for reshaping, although
-#     # it is not very important which is used as long as it is CONSISTENT
-#     if convert_tensor:
+    
 
-#         # important to unroll according to pytorch
-#         shift_x1 = torch.from_numpy(shift_x1).view(1, stack_size, feat_size[1])
-#         shift_y1 = torch.from_numpy(shift_y1).view(1, stack_size, feat_size[1])
-#         shift_x2 = torch.from_numpy(shift_x2).view(1, stack_size, feat_size[1])
-#         shift_y2 = torch.from_numpy(shift_y2).view(1, stack_size, feat_size[1])
-#         anchor_tracker = torch.from_numpy(anchor_tracker).view(1, stack_size, feat_size[1])
+    shift_x1 = shift_x1.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
+    shift_y1 = shift_y1.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
+    shift_x2 = shift_x2.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
+    shift_y2 = shift_y2.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
+    anchor_tracker = anchor_tracker.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
 
-#         shift_x1.requires_grad = False
-#         shift_y1.requires_grad = False
-#         shift_x2.requires_grad = False
-#         shift_y2.requires_grad = False
-#         anchor_tracker.requires_grad = False
+    rois = np.concatenate((shift_x1, shift_y1, shift_x2, shift_y2, anchor_tracker), 1)
 
-#         shift_x1 = shift_x1.permute(1, 2, 0).contiguous().view(-1, 1)
-#         shift_y1 = shift_y1.permute(1, 2, 0).contiguous().view(-1, 1)
-#         shift_x2 = shift_x2.permute(1, 2, 0).contiguous().view(-1, 1)
-#         shift_y2 = shift_y2.permute(1, 2, 0).contiguous().view(-1, 1)
-#         anchor_tracker = anchor_tracker.permute(1, 2, 0).contiguous().view(-1, 1)
-
-#         rois = torch.cat((shift_x1, shift_y1, shift_x2, shift_y2, anchor_tracker), 1)
-
-#     else:
-
-#         shift_x1 = shift_x1.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
-#         shift_y1 = shift_y1.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
-#         shift_x2 = shift_x2.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
-#         shift_y2 = shift_y2.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
-#         anchor_tracker = anchor_tracker.reshape(1, stack_size, feat_size[1]).reshape(-1, 1)
-
-#         rois = np.concatenate((shift_x1, shift_y1, shift_x2, shift_y2, anchor_tracker), 1)
-
-#     return rois
+    return rois
 
 
-# def calc_output_size(res, stride):
-#     """
-#     Approximate the output size of a network
+def calc_output_size(res, stride): 
+    """
+    Approximate the output size of a network
 
-#     Args:
-#         res (ndarray): input resolution
-#         stride (int): stride of a network
+    Args:
+        res (ndarray): input resolution
+        stride (int): stride of a network
 
-#     Returns:
-#          ndarray: output resolution
-#     """
+    Returns:
+         ndarray: output resolution
+    """
 
-#     return np.ceil(np.array(res)/stride).astype(int)
+    return np.ceil(np.array(res)/stride).astype(int)
 
 
 # def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):

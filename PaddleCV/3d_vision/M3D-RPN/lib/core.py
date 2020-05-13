@@ -25,6 +25,8 @@ import os
 import cv2
 import math
 import numpy as np
+import struct
+from paddle.fluid.proto.framework_pb2 import VarType
 
 # stop python from writing so much bytecode
 sys.dont_write_bytecode = True
@@ -65,7 +67,7 @@ def init_training_model(conf, backbone, cache_folder):
 
     # load and build
     network = absolute_import(dst_path)
-    network = network.build(conf, backbone, 'train')
+    #network = network.m3d-rpn(conf, backbone, 'train')
 
     # multi-gpu
     #network = torch.nn.DataParallel(network)
@@ -365,40 +367,50 @@ def iou(box_a, box_b, mode='combinations', data_type=None):
 #                 if isinstance(module, torch.nn.BatchNorm2d):
 #                     module.eval()
 
+def to_int(string, dest="I"):
+    return struct.unpack(dest, string)[0]
 
-# def load_weights(model, path, remove_module=False):
-#     """
-#     Simply loads a pytorch models weights from a given path.
-#     """
-#     dst_weights = model.state_dict()
-#     src_weights = torch.load(path)
+def parse_shape_from_file(filename):
+    with open(filename, "rb") as file:
+        version = file.read(4)
+        lod_level = to_int(file.read(8), dest="Q")
+        for i in range(lod_level):
+            _size = to_int(file.read(8), dest="Q")
+            _ = file.read(_size)
+        version = file.read(4)
+        tensor_desc_size = to_int(file.read(4))
+        tensor_desc = VarType.TensorDesc()
+        tensor_desc.ParseFromString(file.read(tensor_desc_size))
+    return tuple(tensor_desc.dims)
 
-#     dst_keys = list(dst_weights.keys())
-#     src_keys = list(src_weights.keys())
+def load_vars(train_prog, path):
+    """
+    loads a paddle models vars from a given path.
+    """
+    load_vars = []
+    load_fail_vars = []
 
-#     if remove_module:
+    def var_shape_matched(var, shape):
+        var_exist = os.path.exists(
+            os.path.join(path, var.name))
+        if var_exist:
+            var_shape = parse_shape_from_file(
+                os.path.join(path, var.name))
+            return var_shape == shape
+        return False
+    
+    
+        
+    for x in train_prog.list_vars():
+        if isinstance(x, fluid.framework.Parameter):
+            shape = tuple(fluid.global_scope().find_var(
+                x.name).get_tensor().shape())
+            if var_shape_matched(x, shape):
+                load_vars.append(x)
+            else:
+                load_fail_vars.append(x)
 
-#         # copy keys without module
-#         for key in src_keys:
-#             src_weights[key.replace('module.', '')] = src_weights[key]
-#             del src_weights[key]
-#         src_keys = list(src_weights.keys())
-
-#         # remove keys not in dst
-#         for key in src_keys:
-#             if key not in dst_keys: del src_weights[key]
-
-#     else:
-
-#         # remove keys not in dst
-#         for key in src_keys:
-#             if key not in dst_keys: del src_weights[key]
-
-#         # add keys not in src
-#         for key in dst_keys:
-#             if key not in src_keys: src_weights[key] = dst_weights[key]
-
-#     model.load_state_dict(src_weights)
+    return load_vars, load_fail_vars
 
 
 # def log_stats(tracker, iteration, start_time, start_iter, max_iter, skip=1):

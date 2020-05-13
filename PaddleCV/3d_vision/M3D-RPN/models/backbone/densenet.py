@@ -73,18 +73,33 @@ class DenseNet():
             pool_type='max')
         num_features = num_init_features
         for i, num_layers in enumerate(block_config):
-            conv = self.make_dense_block(
-                conv,
-                num_layers,
-                bn_size,
-                growth_rate,
-                dropout,
-                name='conv' + str(i + 2))
-            num_features = num_features + num_layers * growth_rate
+            if i == 3: # for rpn, dilate conv
+                conv = self.make_dense_block_rpn(
+                    conv,
+                    num_layers,
+                    bn_size,
+                    growth_rate,
+                    dropout,
+                    name='conv' + str(i + 2))
+                num_features = num_features + num_layers * growth_rate
+            else:
+                conv = self.make_dense_block(
+                    conv,
+                    num_layers,
+                    bn_size,
+                    growth_rate,
+                    dropout,
+                    name='conv' + str(i + 2))
+                num_features = num_features + num_layers * growth_rate
             if i != len(block_config) - 1:
-                conv = self.make_transition(
+                if i == 2: # for rpn, del pool 
+                    conv = self.make_transition_rpn(
                     conv, num_features // 2, name='conv' + str(i + 2) + '_blk')
-                num_features = num_features // 2
+                    num_features = num_features // 2
+                else:
+                    conv = self.make_transition(
+                        conv, num_features // 2, name='conv' + str(i + 2) + '_blk')
+                    num_features = num_features // 2
         conv = fluid.layers.batch_norm(
             input=conv,
             act='relu',
@@ -92,17 +107,17 @@ class DenseNet():
             bias_attr=ParamAttr(name='conv5_blk_bn_offset'),
             moving_mean_name='conv5_blk_bn_mean',
             moving_variance_name='conv5_blk_bn_variance')
-        conv = fluid.layers.pool2d(
-            input=conv, pool_type='avg', global_pooling=True)
-        stdv = 1.0 / math.sqrt(conv.shape[1] * 1.0)
-        out = fluid.layers.fc(
-            input=conv,
-            size=class_dim,
-            param_attr=fluid.param_attr.ParamAttr(
-                initializer=fluid.initializer.Uniform(-stdv, stdv),
-                name="fc_weights"),
-            bias_attr=ParamAttr(name='fc_offset'))
-        return out
+        # conv = fluid.layers.pool2d(
+        #     input=conv, pool_type='avg', global_pooling=True)
+        # stdv = 1.0 / math.sqrt(conv.shape[1] * 1.0)
+        # out = fluid.layers.fc(
+        #     input=conv,
+        #     size=class_dim,
+        #     param_attr=fluid.param_attr.ParamAttr(
+        #         initializer=fluid.initializer.Uniform(-stdv, stdv),
+        #         name="fc_weights"),
+        #     bias_attr=ParamAttr(name='fc_offset'))
+        return conv
 
     def make_transition(self, input, num_output_features, name=None):
         """make_transition"""
@@ -125,6 +140,28 @@ class DenseNet():
         pool = fluid.layers.pool2d(
             input=bn_ac_conv, pool_size=2, pool_stride=2, pool_type='avg')
         return pool
+
+    def make_transition_rpn(self, input, num_output_features, name=None):
+        """make_transition"""
+        bn_ac = fluid.layers.batch_norm(
+            input,
+            act='relu',
+            param_attr=ParamAttr(name=name + '_bn_scale'),
+            bias_attr=ParamAttr(name + '_bn_offset'),
+            moving_mean_name=name + '_bn_mean',
+            moving_variance_name=name + '_bn_variance')
+
+        bn_ac_conv = fluid.layers.conv2d(
+            input=bn_ac,
+            num_filters=num_output_features,
+            filter_size=1,
+            stride=1,
+            act=None,
+            bias_attr=False,
+            param_attr=ParamAttr(name=name + "_weights"))
+        # pool = fluid.layers.pool2d(
+        #     input=bn_ac_conv, pool_size=2, pool_stride=2, pool_type='avg')
+        return bn_ac_conv
 
     def make_dense_block(self,
                          input,
@@ -174,6 +211,64 @@ class DenseNet():
             filter_size=3,
             stride=1,
             padding=1,
+            act=None,
+            bias_attr=False,
+            param_attr=ParamAttr(name=name + "_x2_weights"))
+        if dropout:
+            bn_ac_conv = fluid.layers.dropout(
+                x=bn_ac_conv, dropout_prob=dropout)
+        bn_ac_conv = fluid.layers.concat([input, bn_ac_conv], axis=1)
+        return bn_ac_conv
+
+    def make_dense_block_rpn(self,
+                         input,
+                         num_layers,
+                         bn_size,
+                         growth_rate,
+                         dropout,
+                         name=None):
+        """make_dense_block"""
+        conv = input
+        for layer in range(num_layers):
+            conv = self.make_dense_layer_rpn(
+                conv,
+                growth_rate,
+                bn_size,
+                dropout,
+                name=name + '_' + str(layer + 1))
+        return conv
+
+    def make_dense_layer_rpn(self, input, growth_rate, bn_size, dropout, name=None):
+        """make_dense_layer"""
+        bn_ac = fluid.layers.batch_norm(
+            input,
+            act='relu',
+            param_attr=ParamAttr(name=name + '_x1_bn_scale'),
+            bias_attr=ParamAttr(name + '_x1_bn_offset'),
+            moving_mean_name=name + '_x1_bn_mean',
+            moving_variance_name=name + '_x1_bn_variance')
+        bn_ac_conv = fluid.layers.conv2d(
+            input=bn_ac,
+            num_filters=bn_size * growth_rate,
+            filter_size=1,
+            stride=1,
+            act=None,
+            bias_attr=False,
+            param_attr=ParamAttr(name=name + "_x1_weights"))
+        bn_ac = fluid.layers.batch_norm(
+            bn_ac_conv,
+            act='relu',
+            param_attr=ParamAttr(name=name + '_x2_bn_scale'),
+            bias_attr=ParamAttr(name + '_x2_bn_offset'),
+            moving_mean_name=name + '_x2_bn_mean',
+            moving_variance_name=name + '_x2_bn_variance')
+        bn_ac_conv = fluid.layers.conv2d(
+            input=bn_ac,
+            num_filters=growth_rate,
+            filter_size=3,
+            stride=1,
+            dilation=2, # for rpn
+            padding=2, # for rpn
             act=None,
             bias_attr=False,
             param_attr=ParamAttr(name=name + "_x2_weights"))
