@@ -138,6 +138,12 @@ def parse_args():
         action='store_true',
         help='The flag indicating whether to run the task '
         'for continuous evaluation.')
+    parser.add_argument(
+        '--pretrain',
+        #action='store_true',
+        default="pretrained_model/densenet121", 
+        help='static backbone model path')
+    
     args = parser.parse_args()
     return args
 
@@ -218,6 +224,14 @@ def train():
     place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
         if args.use_data_parallel else fluid.CUDAPlace(0)
 
+    print("pretrain path:", args.pretrain)
+    pretrain = fluid.load_program_state(args.pretrain)
+    print("load ok")
+    pdb.set_trace()
+    pretrain_list = sorted(pretrain.items())#, key=operator.itemgetter(1)) 
+    pretrain = {pretrain_data[0]: pretrain_data[1] for pretrain_data in pretrain_list}
+    print("backbone-static keys: ", pretrain.keys())
+
     with fluid.dygraph.guard(place):
         if args.ce:
             print("ce mode")
@@ -238,6 +252,12 @@ def train():
         if args.use_data_parallel:
             train_reader = fluid.contrib.reader.distributed_batch_reader(
                 train_reader)
+        #TODO
+        #load_vars, load_fail_vars = core.load_vars(train_prog, conf.pretrained)
+        state_dict = train_model.state_dict()
+        pdb.set_trace()
+        print("backbone-dynamic keys: ", state_dict.keys())
+        #TODO save pdparams
         #pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
         #state_dict = train_model.state_dict()
         #Convert

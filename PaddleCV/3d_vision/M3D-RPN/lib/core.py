@@ -67,7 +67,7 @@ def init_training_model(conf, backbone, cache_folder):
 
     # load and build
     network = absolute_import(dst_path)
-    #network = network.m3d-rpn(conf, backbone, 'train')
+    network = network.build(conf, backbone, 'train')
 
     # multi-gpu
     #network = torch.nn.DataParallel(network)
@@ -78,25 +78,22 @@ def init_training_model(conf, backbone, cache_folder):
         lr = conf.lr
         mo = conf.momentum
         wd = conf.weight_decay
-        optimizer = fluid.optimizer.SGD(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd))
-        #optimizer = torch.optim.SGD(network.parameters(), lr=lr, momentum=mo, weight_decay=wd)
-
+        optimizer = fluid.optimizer.SGD(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
+       
     # load adam
     elif conf.solver_type.lower() == 'adam':
 
         lr = conf.lr
         wd = conf.weight_decay
-        optimizer = fluid.optimizer.Adam(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd))
-        #optimizer = torch.optim.Adam(network.parameters(), lr=lr, weight_decay=wd)
-
+        optimizer = fluid.optimizer.Adam(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
+        
     # load adamax
     elif conf.solver_type.lower() == 'adamax':
 
         lr = conf.lr
         wd = conf.weight_decay
-        optimizer = fluid.optimizer.Adamax(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd))
-        #optimizer = torch.optim.Adamax(network.parameters(), lr=lr, weight_decay=wd)
-
+        optimizer = fluid.optimizer.Adamax(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
+        
 
     return network, optimizer
 
