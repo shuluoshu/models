@@ -123,7 +123,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
         # get all rois
         # rois' type now is nparray
-        rois = locate_anchors(self.anchors, feat_size, self.feat_stride, convert_tensor=False)
+        rois = locate_anchors(self.anchors, feat_size, self.feat_stride)
         rois = rois.astype('float32')
 
         #bbox_3d dtype is Variable, so bbox_3d_dn is
