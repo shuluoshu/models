@@ -192,8 +192,8 @@ def intersect(box_a, box_b, mode='combinations', data_type=None):
 
         # np.ndarray
         if data_type == np.ndarray:
-            max_xy = np.min(box_a[:, 2:], box_b[:, 2:])
-            min_xy = np.max(box_a[:, :2], box_b[:, :2])
+            max_xy = np.minimum(box_a[:, 2:], box_b[:, 2:])
+            min_xy = np.maximum(box_a[:, :2], box_b[:, :2])
             inter = np.clip((max_xy - min_xy), a_min=0, a_max=None)
 
         # unknown type
@@ -291,45 +291,43 @@ def iou(box_a, box_b, mode='combinations', data_type=None):
         raise ValueError('unknown mode {}'.format(mode))
 
 
-# def iou_ign(box_a, box_b, mode='combinations', data_type=None):
-#     """
-#     Computes the amount of overap of box_b has within box_a, which is handy for dealing with ignore regions.
-#     Hence, assume that box_b are ignore regions and box_a are anchor boxes, then we may want to know how
-#     much overlap the anchors have inside of the ignore regions (hence ignore area_b!)
+def iou_ign(box_a, box_b, mode='combinations', data_type=None):
+    """
+    Computes the amount of overap of box_b has within box_a, which is handy for dealing with ignore regions.
+    Hence, assume that box_b are ignore regions and box_a are anchor boxes, then we may want to know how
+    much overlap the anchors have inside of the ignore regions (hence ignore area_b!)
 
-#     Args:
-#         box_a (nparray): Mx4 boxes, defined by [x1, y1, x2, y2]
-#         box_a (nparray): Nx4 boxes, defined by [x1, y1, x2, y2]
-#         mode (str): either 'combinations' or 'list', where combinations will check all combinations of box_a and
-#                     box_b hence MxN array, and list expects the same size list M == N, hence returns Mx1 array.
-#         data_type (type): either torch.Tensor or np.ndarray, we automatically determine otherwise
-#     """
+    Args:
+        box_a (nparray): Mx4 boxes, defined by [x1, y1, x2, y2]
+        box_a (nparray): Nx4 boxes, defined by [x1, y1, x2, y2]
+        mode (str): either 'combinations' or 'list', where combinations will check all combinations of box_a and
+                    box_b hence MxN array, and list expects the same size list M == N, hence returns Mx1 array.
+        data_type (type): either torch.Tensor or np.ndarray, we automatically determine otherwise
+    """
 
-#     if data_type is None: data_type = type(box_a)
+    if data_type is None: data_type = type(box_a)
 
-#     # this mode computes the IoU in the sense of combinations.
-#     # i.e., box_a = M x 4, box_b = N x 4 then the output is M x N
-#     if mode == 'combinations':
+    # this mode computes the IoU in the sense of combinations.
+    # i.e., box_a = M x 4, box_b = N x 4 then the output is M x N
+    if mode == 'combinations':
 
-#         inter = intersect(box_a, box_b, data_type=data_type)
-#         area_a = ((box_a[:, 2] - box_a[:, 0]) *
-#                   (box_a[:, 3] - box_a[:, 1]))
-#         area_b = ((box_b[:, 2] - box_b[:, 0]) *
-#                   (box_b[:, 3] - box_b[:, 1]))
-#         union = np.expand_dims(area_a, 0) + np.expand_dims(area_b, 1) * 0 - inter * 0
+        inter = intersect(box_a, box_b, data_type=data_type)
+        area_a = ((box_a[:, 2] - box_a[:, 0]) *
+                  (box_a[:, 3] - box_a[:, 1]))
+        area_b = ((box_b[:, 2] - box_b[:, 0]) *
+                  (box_b[:, 3] - box_b[:, 1]))
+        union = np.expand_dims(area_a, 0) + np.expand_dims(area_b, 1) * 0 - inter * 0
 
-#         # torch and numpy have different calls for transpose
-#         if data_type == torch.Tensor:
-#             return (inter / union).permute(1, 0)
-#         elif data_type == np.ndarray:
-#             return (inter / union).T
+        # torch and numpy have different calls for transpose
+        if data_type == np.ndarray:
+            return (inter / union).T
 
-#         # unknown type
-#         else:
-#             raise ValueError('unknown data type {}'.format(data_type))
+        # unknown type
+        else:
+            raise ValueError('unknown data type {}'.format(data_type))
 
-#     else:
-#         raise ValueError('unknown mode {}'.format(mode))
+    else:
+        raise ValueError('unknown mode {}'.format(mode))
 
 
 # def freeze_layers(network, blacklist=None, whitelist=None, verbose=False):
