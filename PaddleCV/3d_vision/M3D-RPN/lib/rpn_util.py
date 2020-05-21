@@ -422,109 +422,109 @@ def cluster_anchors(feat_stride, anchors, test_scale, imdb, lbls, ilbls, anchor_
     return best_anchors
 
 
-# def compute_targets(gts_val, gts_ign, box_lbls, rois, fg_thresh, ign_thresh, bg_thresh_lo, bg_thresh_hi, best_thresh,
-#                     gts_3d=None, anchors=[], tracker=[]):
-#     """
-#     Computes the bbox targets of a set of rois and a set
-#     of ground truth boxes, provided various ignore
-#     settings in configuration
-#     """
+def compute_targets(gts_val, gts_ign, box_lbls, rois, fg_thresh, ign_thresh, bg_thresh_lo, bg_thresh_hi, best_thresh,
+                     gts_3d=None, anchors=[], tracker=[]):
+     """
+     Computes the bbox targets of a set of rois and a set
+     of ground truth boxes, provided various ignore
+     settings in configuration
+     """
 
-#     ols = None
-#     has_3d = gts_3d is not None
+     ols = None
+     has_3d = gts_3d is not None
 
-#     # init transforms which respectively hold [dx, dy, dw, dh, label]
-#     # for labels bg=-1, ign=0, fg>=1
-#     transforms = np.zeros([len(rois), 5], dtype=np.float32)
-#     raw_gt = np.zeros([len(rois), 5], dtype=np.float32)
+     # init transforms which respectively hold [dx, dy, dw, dh, label]
+     # for labels bg=-1, ign=0, fg>=1
+     transforms = np.zeros([len(rois), 5], dtype=np.float32)
+     raw_gt = np.zeros([len(rois), 5], dtype=np.float32)
 
-#     # if 3d, then init other terms after
-#     if has_3d:
-#         transforms = np.pad(transforms, [(0, 0), (0, gts_3d.shape[1])], 'constant')
-#         raw_gt = np.pad(raw_gt, [(0, 0), (0, gts_3d.shape[1])], 'constant')
+     # if 3d, then init other terms after
+     if has_3d:
+         transforms = np.pad(transforms, [(0, 0), (0, gts_3d.shape[1])], 'constant')
+         raw_gt = np.pad(raw_gt, [(0, 0), (0, gts_3d.shape[1])], 'constant')
 
-#     if gts_val.shape[0] > 0 or gts_ign.shape[0] > 0:
+     if gts_val.shape[0] > 0 or gts_ign.shape[0] > 0:
 
-#         if gts_ign.shape[0] > 0:
+         if gts_ign.shape[0] > 0:
 
-#             # compute overlaps ign
-#             ols_ign = iou_ign(rois, gts_ign)
-#             ols_ign_max = np.amax(ols_ign, axis=1)
+             # compute overlaps ign
+             ols_ign = iou_ign(rois, gts_ign)
+             ols_ign_max = np.amax(ols_ign, axis=1)
 
-#         else:
-#             ols_ign_max = np.zeros([rois.shape[0]], dtype=np.float32)
+         else:
+             ols_ign_max = np.zeros([rois.shape[0]], dtype=np.float32)
 
-#         if gts_val.shape[0] > 0:
+         if gts_val.shape[0] > 0:
 
-#             # compute overlaps valid
-#             ols = iou(rois, gts_val)
-#             ols_max = np.amax(ols, axis=1)
-#             targets = np.argmax(ols, axis=1)
+             # compute overlaps valid
+             ols = iou(rois, gts_val)
+             ols_max = np.amax(ols, axis=1)
+             targets = np.argmax(ols, axis=1)
 
-#             # find best matches for each ground truth
-#             gt_best_rois = np.argmax(ols, axis=0)
-#             gt_best_ols = np.amax(ols, axis=0)
+             # find best matches for each ground truth
+             gt_best_rois = np.argmax(ols, axis=0)
+             gt_best_ols = np.amax(ols, axis=0)
 
-#             gt_best_rois = gt_best_rois[gt_best_ols >= best_thresh]
-#             gt_best_ols = gt_best_ols[gt_best_ols >= best_thresh]
+             gt_best_rois = gt_best_rois[gt_best_ols >= best_thresh]
+             gt_best_ols = gt_best_ols[gt_best_ols >= best_thresh]
 
-#             fg_inds = np.flatnonzero(ols_max >= fg_thresh)
-#             fg_inds = np.concatenate((fg_inds, gt_best_rois))
-#             fg_inds = np.unique(fg_inds)
+             fg_inds = np.flatnonzero(ols_max >= fg_thresh)
+             fg_inds = np.concatenate((fg_inds, gt_best_rois))
+             fg_inds = np.unique(fg_inds)
 
-#             target_rois = gts_val[targets[fg_inds], :]
-#             src_rois = rois[fg_inds, :]
+             target_rois = gts_val[targets[fg_inds], :]
+             src_rois = rois[fg_inds, :]
 
-#             if len(fg_inds) > 0:
+             if len(fg_inds) > 0:
 
-#                 # compute 2d transform
-#                 transforms[fg_inds, 0:4] = bbox_transform(src_rois, target_rois)
+                 # compute 2d transform
+                 transforms[fg_inds, 0:4] = bbox_transform(src_rois, target_rois)
 
-#                 raw_gt[fg_inds, 0:4] = target_rois
+                 raw_gt[fg_inds, 0:4] = target_rois
 
-#                 if has_3d:
+                 if has_3d:
 
-#                     tracker = tracker.astype(np.int64)
-#                     src_3d = anchors[tracker[fg_inds], 4:]
-#                     target_3d = gts_3d[targets[fg_inds]]
+                     tracker = tracker.astype(np.int64)
+                     src_3d = anchors[tracker[fg_inds], 4:]
+                     target_3d = gts_3d[targets[fg_inds]]
 
-#                     raw_gt[fg_inds, 5:] = target_3d
+                     raw_gt[fg_inds, 5:] = target_3d
 
-#                     # compute 3d transform
-#                     transforms[fg_inds, 5:] = bbox_transform_3d(src_rois, src_3d, target_3d)
-
-
-#                 # store labels
-#                 transforms[fg_inds, 4] = [box_lbls[x] for x in targets[fg_inds]]
-#                 assert (all(transforms[fg_inds, 4] >= 1))
-
-#         else:
-
-#             ols_max = np.zeros(rois.shape[0], dtype=int)
-#             fg_inds = np.empty(shape=[0])
-#             gt_best_rois = np.empty(shape=[0])
-
-#         # determine ignores
-#         ign_inds = np.flatnonzero(ols_ign_max >= ign_thresh)
-
-#         # determine background
-#         bg_inds = np.flatnonzero((ols_max >= bg_thresh_lo) & (ols_max < bg_thresh_hi))
-
-#         # subtract fg and igns from background
-#         bg_inds = np.setdiff1d(bg_inds, ign_inds)
-#         bg_inds = np.setdiff1d(bg_inds, fg_inds)
-#         bg_inds = np.setdiff1d(bg_inds, gt_best_rois)
-
-#         # mark background
-#         transforms[bg_inds, 4] = -1
-
-#     else:
-
-#         # all background
-#         transforms[:, 4] = -1
+                     # compute 3d transform
+                     transforms[fg_inds, 5:] = bbox_transform_3d(src_rois, src_3d, target_3d)
 
 
-#     return transforms, ols, raw_gt
+                 # store labels
+                 transforms[fg_inds, 4] = [box_lbls[x] for x in targets[fg_inds]]
+                 assert (all(transforms[fg_inds, 4] >= 1))
+
+         else:
+
+             ols_max = np.zeros(rois.shape[0], dtype=int)
+             fg_inds = np.empty(shape=[0])
+             gt_best_rois = np.empty(shape=[0])
+
+         # determine ignores
+         ign_inds = np.flatnonzero(ols_ign_max >= ign_thresh)
+
+         # determine background
+         bg_inds = np.flatnonzero((ols_max >= bg_thresh_lo) & (ols_max < bg_thresh_hi))
+
+         # subtract fg and igns from background
+         bg_inds = np.setdiff1d(bg_inds, ign_inds)
+         bg_inds = np.setdiff1d(bg_inds, fg_inds)
+         bg_inds = np.setdiff1d(bg_inds, gt_best_rois)
+
+         # mark background
+         transforms[bg_inds, 4] = -1
+
+     else:
+
+         # all background
+         transforms[:, 4] = -1
+
+
+     return transforms, ols, raw_gt
 
 
 # def hill_climb(p2, p2_inv, box_2d, x2d, y2d, z2d, w3d, h3d, l3d, ry3d, step_z_init=0, step_r_init=0, z_lim=0, r_lim=0, min_ol_dif=0.0):
@@ -598,14 +598,14 @@ def cluster_anchors(feat_stride, anchors, test_scale, imdb, lbls, ilbls, anchor_
 #         raise ValueError('unknown class')
 
 
-# def clsName2Ind(lbls, cls):
-#     """
-#     Converts a cls name to an ind
-#     """
-#     if cls in lbls:
-#         return lbls.index(cls) + 1
-#     else:
-#         raise ValueError('unknown class')
+def clsName2Ind(lbls, cls):
+    """
+    Converts a cls name to an ind
+    """
+    if cls in lbls:
+        return lbls.index(cls) + 1
+    else:
+        raise ValueError('unknown class')
 
 
 # def compute_bbox_stats(conf, imdb, cache_folder=''):
@@ -936,118 +936,123 @@ def bbXYWH2Coords(box):
     return box
 
 
-# def bbox_transform_3d(ex_rois_2d, ex_rois_3d, gt_rois):
-#     """
-#     Compute the bbox target transforms in 3D.
+def bbox_transform_3d(ex_rois_2d, ex_rois_3d, gt_rois):
+    """
+    Compute the bbox target transforms in 3D.
 
-#     Translations are done as simple difference, whereas others involving
-#     scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
-#     log(1.2) > 0 which is a good property).
-#     """
+    Translations are done as simple difference, whereas others involving
+    scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+    log(1.2) > 0 which is a good property).
+    """
 
-#     ex_widths = ex_rois_2d[:, 2] - ex_rois_2d[:, 0] + 1.0
-#     ex_heights = ex_rois_2d[:, 3] - ex_rois_2d[:, 1] + 1.0
-#     ex_ctr_x = ex_rois_2d[:, 0] + 0.5 * (ex_widths - 1)
-#     ex_ctr_y = ex_rois_2d[:, 1] + 0.5 * (ex_heights - 1)
+    ex_widths = ex_rois_2d[:, 2] - ex_rois_2d[:, 0] + 1.0
+    ex_heights = ex_rois_2d[:, 3] - ex_rois_2d[:, 1] + 1.0
+    ex_ctr_x = ex_rois_2d[:, 0] + 0.5 * (ex_widths - 1)
+    ex_ctr_y = ex_rois_2d[:, 1] + 0.5 * (ex_heights - 1)
 
-#     gt_ctr_x = gt_rois[:, 0]
-#     gt_ctr_y = gt_rois[:, 1]
+    gt_ctr_x = gt_rois[:, 0]
+    gt_ctr_y = gt_rois[:, 1]
 
-#     targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths
-#     targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights
+    targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths
+    targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights
 
-#     delta_z = gt_rois[:, 2] - ex_rois_3d[:, 0]
-#     scale_w = np.log(gt_rois[:, 3] / ex_rois_3d[:, 1])
-#     scale_h = np.log(gt_rois[:, 4] / ex_rois_3d[:, 2])
-#     scale_l = np.log(gt_rois[:, 5] / ex_rois_3d[:, 3])
-#     deltaRotY = gt_rois[:, 6] - ex_rois_3d[:, 4]
+    delta_z = gt_rois[:, 2] - ex_rois_3d[:, 0]
+    scale_w = np.log(gt_rois[:, 3] / ex_rois_3d[:, 1])
+    scale_h = np.log(gt_rois[:, 4] / ex_rois_3d[:, 2])
+    scale_l = np.log(gt_rois[:, 5] / ex_rois_3d[:, 3])
+    deltaRotY = gt_rois[:, 6] - ex_rois_3d[:, 4]
 
-#     targets = np.vstack((targets_dx, targets_dy, delta_z, scale_w, scale_h, scale_l, deltaRotY)).transpose()
-#     targets = np.hstack((targets, gt_rois[:, 7:]))
-
-
-#     return targets
+    targets = np.vstack((targets_dx, targets_dy, delta_z, scale_w, scale_h, scale_l, deltaRotY)).transpose()
+    targets = np.hstack((targets, gt_rois[:, 7:]))
 
 
-# def bbox_transform(ex_rois, gt_rois):
-#     """
-#     Compute the bbox target transforms in 2D.
-
-#     Translations are done as simple difference, whereas others involving
-#     scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
-#     log(1.2) > 0 which is a good property).
-#     """
-
-#     ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0
-#     ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0
-#     ex_ctr_x = ex_rois[:, 0] + 0.5 * (ex_widths - 1)
-#     ex_ctr_y = ex_rois[:, 1] + 0.5 * (ex_heights - 1)
-
-#     gt_widths = gt_rois[:, 2] - gt_rois[:, 0] + 1.0
-#     gt_heights = gt_rois[:, 3] - gt_rois[:, 1] + 1.0
-#     gt_ctr_x = gt_rois[:, 0] + 0.5 * (gt_widths - 1.0)
-#     gt_ctr_y = gt_rois[:, 1] + 0.5 * (gt_heights - 1.0)
-
-#     targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths
-#     targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights
-#     targets_dw = np.log(gt_widths / ex_widths)
-#     targets_dh = np.log(gt_heights / ex_heights)
-
-#     targets = np.vstack((targets_dx, targets_dy, targets_dw, targets_dh)).transpose()
-
-#     return targets
+    return targets
 
 
-# def bbox_transform_inv(boxes, deltas, means=None, stds=None):
-#     """
-#     Compute the bbox target transforms in 3D.
+def bbox_transform(ex_rois, gt_rois):
+    """
+    Compute the bbox target transforms in 2D.
 
-#     Translations are done as simple difference, whereas others involving
-#     scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
-#     log(1.2) > 0 which is a good property).
-#     """
+    Translations are done as simple difference, whereas others involving
+    scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+    log(1.2) > 0 which is a good property).
+    """
 
-#     if boxes.shape[0] == 0:
-#         return np.zeros((0, deltas.shape[1]), dtype=deltas.dtype)
+    ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0
+    ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0
+    ex_ctr_x = ex_rois[:, 0] + 0.5 * (ex_widths - 1)
+    ex_ctr_y = ex_rois[:, 1] + 0.5 * (ex_heights - 1)
 
-#     # boxes = boxes.astype(deltas.dtype, copy=False)
+    gt_widths = gt_rois[:, 2] - gt_rois[:, 0] + 1.0
+    gt_heights = gt_rois[:, 3] - gt_rois[:, 1] + 1.0
+    gt_ctr_x = gt_rois[:, 0] + 0.5 * (gt_widths - 1.0)
+    gt_ctr_y = gt_rois[:, 1] + 0.5 * (gt_heights - 1.0)
 
-#     widths = boxes[:, 2] - boxes[:, 0] + 1.0
-#     heights = boxes[:, 3] - boxes[:, 1] + 1.0
-#     ctr_x = boxes[:, 0] + 0.5 * widths
-#     ctr_y = boxes[:, 1] + 0.5 * heights
+    targets_dx = (gt_ctr_x - ex_ctr_x) / ex_widths
+    targets_dy = (gt_ctr_y - ex_ctr_y) / ex_heights
+    targets_dw = np.log(gt_widths / ex_widths)
+    targets_dh = np.log(gt_heights / ex_heights)
 
-#     dx = deltas[:, 0]
-#     dy = deltas[:, 1]
-#     dw = deltas[:, 2]
-#     dh = deltas[:, 3]
+    targets = np.vstack((targets_dx, targets_dy, targets_dw, targets_dh)).transpose()
 
-#     if stds is not None:
-#         dx *= stds[0]
-#         dy *= stds[1]
-#         dw *= stds[2]
-#         dh *= stds[3]
+    return targets
 
-#     if means is not None:
-#         dx += means[0]
-#         dy += means[1]
-#         dw += means[2]
-#         dh += means[3]
 
-#     pred_ctr_x = dx * widths + ctr_x
-#     pred_ctr_y = dy * heights + ctr_y
-#     pred_w = torch.exp(dw) * widths
-#     pred_h = torch.exp(dh) * heights
+def bbox_transform_inv(boxes, deltas, means=None, stds=None):
+     """
+     Compute the bbox target transforms in 3D.
 
-#     pred_boxes = torch.zeros(deltas.shape)
+     Translations are done as simple difference, whereas others involving
+     scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+     log(1.2) > 0 which is a good property).
+  
+     Args:
+         bboxes (nparray): N x 5 array describing [x1, y1, x2, y2, anchor_index]
+         deltas (nparray): N x 4 array describing [dx, dy, dw, dh]
+     return: bbox target transforms in 3D (nparray) 
+     """
 
-#     # x1, y1, x2, y2
-#     pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
-#     pred_boxes[:, 1] = pred_ctr_y - 0.5 * pred_h
-#     pred_boxes[:, 2] = pred_ctr_x + 0.5 * pred_w
-#     pred_boxes[:, 3] = pred_ctr_y + 0.5 * pred_h
+     if boxes.shape[0] == 0:
+         return np.zeros((0, deltas.shape[1]), dtype=deltas.dtype)
 
-#     return pred_boxes
+     # boxes = boxes.astype(deltas.dtype, copy=False)
+
+     widths = boxes[:, 2] - boxes[:, 0] + 1.0
+     heights = boxes[:, 3] - boxes[:, 1] + 1.0
+     ctr_x = boxes[:, 0] + 0.5 * widths
+     ctr_y = boxes[:, 1] + 0.5 * heights
+
+     dx = deltas[:, 0]
+     dy = deltas[:, 1]
+     dw = deltas[:, 2]
+     dh = deltas[:, 3]
+
+     if stds is not None:
+         dx *= stds[0]
+         dy *= stds[1]
+         dw *= stds[2]
+         dh *= stds[3]
+
+     if means is not None:
+         dx += means[0]
+         dy += means[1]
+         dw += means[2]
+         dh += means[3]
+
+     pred_ctr_x = dx * widths + ctr_x
+     pred_ctr_y = dy * heights + ctr_y
+     pred_w = np.exp(dw) * widths
+     pred_h = np.exp(dh) * heights
+
+     pred_boxes = np.zeros(deltas.shape)     
+
+     # x1, y1, x2, y2
+     pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
+     pred_boxes[:, 1] = pred_ctr_y - 0.5 * pred_h
+     pred_boxes[:, 2] = pred_ctr_x + 0.5 * pred_w
+     pred_boxes[:, 3] = pred_ctr_y + 0.5 * pred_h
+
+     return pred_boxes
 
 
 def determine_ignores(gts, lbls, ilbls, min_gt_vis=0.99, min_gt_h=0, max_gt_h=10e10, scale_factor=1):
@@ -1120,7 +1125,6 @@ def locate_anchors(anchors, feat_size, stride):
     rois = np.concatenate((shift_x1, shift_y1, shift_x2, shift_y2, anchor_tracker), 1)
 
     return rois
-
 
 def calc_output_size(res, stride): 
     """
