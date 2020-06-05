@@ -537,6 +537,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
             active = bbox_weights > 0
             active_index = np.flatnonzero(active)
+            active_len = active_index.size
             active_index_var = to_variable(active_index)
             active_index_var.stop_gradient = True
             bbox_weights.shape = 1, bbox_total_nums
@@ -593,8 +594,8 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 loss_bbox_w = fluid.layers.smooth_l1(bbox_w_active, bbox_w_tar_active, outside_wieght=bbox_weights_active)
                 loss_bbox_h = fluid.layers.smooth_l1(bbox_h_active, bbox_h_tar_active, outside_wieght=bbox_weights_active)
 
-                bbox_2d_loss = (loss_bbox_x + loss_bbox_y + loss_bbox_w + loss_bbox_h)
-                bbox_2d_loss = fluid.layers.mean(bbox_2d_loss)
+                bbox_2d_loss = (loss_bbox_x + loss_bbox_y + loss_bbox_w + loss_bbox_h) / active_len
+                #bbox_2d_loss = fluid.layers.mean(bbox_2d_loss)
                 bbox_2d_loss *= self.bbox_2d_lambda
 
                 loss += bbox_2d_loss
@@ -684,7 +685,8 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
                 bbox_3d_loss = (loss_bbox_x3d + loss_bbox_y3d + loss_bbox_z3d)
                 bbox_3d_loss += (loss_bbox_w3d + loss_bbox_h3d + loss_bbox_l3d + loss_bbox_ry3d)
-                bbox_3d_loss = fluid.layers.mean(bbox_3d_loss)
+                bbox_3d_loss = bbox_3d_loss / active_len 
+                #bbox_3d_loss = fluid.layers.mean(bbox_3d_loss)
 
                 bbox_3d_loss *= self.bbox_3d_lambda
                 bbox_3d_loss = bbox_3d_loss
@@ -734,7 +736,8 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 loss_bbox_z3d_proj = fluid.layers.smooth_l1(bbox_z3d_proj_active.astype('float32'), bbox_z3d_proj_tar_active.astype('float32'), outside_weight=bbox_weights_active.astype('float32'))
 
                 bbox_3d_proj_loss = (loss_bbox_x3d_proj + loss_bbox_y3d_proj + loss_bbox_z3d_proj)
-                bbox_3d_proj_loss = fluid.layers.mean(bbox_3d_proj_loss)
+                bbox_3d_proj_loss = bbox_3d_proj_loss / active_len
+                #bbox_3d_proj_loss = fluid.layers.mean(bbox_3d_proj_loss)
 
                 bbox_3d_proj_loss *= self.bbox_3d_proj_lambda
 
