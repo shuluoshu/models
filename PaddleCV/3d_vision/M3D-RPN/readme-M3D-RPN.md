@@ -60,8 +60,10 @@ If you utilize this framework, please cite our ICCV 2019 paper.
 
 We use [visdom](https://github.com/facebookresearch/visdom) for visualization and graphs. Optionally, start the server by command line
 
+
+
 ```
-python -m visdom.server -port 8100 -readonly
+sh scripts/train.sh
 ```
 The port can be customized in *scripts/config* files. The training monitor can be viewed at [http://localhost:8100](http://localhost:8100)
 
@@ -89,7 +91,7 @@ We provide models for the main experiments on val1 / val2 / test data splits ava
 Testing requires paths to the configuration file and model weights, exposed variables near the top *scripts/test_rpn_3d.py*. To test a configuration and model, simply update the variables and run the test file as below. 
 
 ```
-python scripts/test_rpn_3d.py 
+sh scripts/test.sh
 ```
 
 ## Contact
