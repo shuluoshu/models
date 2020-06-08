@@ -75,10 +75,13 @@ def init_training_model(conf, backbone, cache_folder):
     # load SGD
     if conf.solver_type.lower() == 'sgd':
 
-        lr = conf.lr
+        start_lr = conf.lr
+        end_lr = conf.lr_target
+        total_step = conf.max_iter
         mo = conf.momentum
         wd = conf.weight_decay
-        optimizer = fluid.optimizer.SGD(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
+        lr = fluid.layers.polynomial_decay(start_lr, total_step, end_lr, power=0.9)
+        optimizer = fluid.optimizer.MomentumOptimizer(learning_rate=lr, momentum=mo, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
        
     # load adam
     elif conf.solver_type.lower() == 'adam':
@@ -108,11 +111,10 @@ def adjust_lr(conf, optimizer, iter):
         optimizer (object): pytorch optim object
         iter (int): current iteration
     """
-
+    
     if 'batch_skip' in conf and ((iter + 1) % conf.batch_skip) > 0: return
-
+    
     if conf.solver_type.lower() == 'sgd':
-
         lr = conf.lr
         lr_steps = conf.lr_steps
         max_iter = conf.max_iter
@@ -143,7 +145,7 @@ def adjust_lr(conf, optimizer, iter):
 
         else:
             raise ValueError('{} lr_policy not understood'.format(lr_policy))
-
+        
         # update the actual learning rate
         for gind, g in enumerate(optimizer.param_groups):
             g['lr'] = lr

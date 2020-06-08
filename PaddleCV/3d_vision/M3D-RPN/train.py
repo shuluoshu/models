@@ -38,7 +38,9 @@ import paddle
 from paddle.fluid.dygraph.base import to_variable
 from paddle.fluid import framework
 import math
+from lib.loss.rpn_3d import *
 import time
+
 
 
 logging.root.handlers = []
@@ -72,47 +74,6 @@ def parse_args():
         default=True,
         help='default use gpu.')
     parser.add_argument(
-        '--batch_size',
-        type=int,
-        default=16,
-        help='training batch size, default 16')
-    
-    # parser.add_argument(
-    #     '--num_classes',
-    #     type=int,
-    #     default=2,
-    #     help='number of classes in dataset, default: 40')
-    parser.add_argument(
-        '--lr',
-        type=float,
-        default=0.01,
-        help='initial learning rate, default 0.01')
-    parser.add_argument(
-        '--lr_decay',
-        type=float,
-        default=0.7,
-        help='learning rate decay gamma, default 0.5')
-    parser.add_argument(
-        '--bn_momentum',
-        type=float,
-        default=0.99,
-        help='initial batch norm momentum, default 0.99')
-    parser.add_argument(
-        '--decay_steps',
-        type=int,
-        default=12500,
-        help='learning rate and batch norm momentum decay steps, default 12500')
-    parser.add_argument(
-        '--weight_decay',
-        type=float,
-        default=1e-5,
-        help='L2 regularization weight decay coeff, default 1e-5.')
-    parser.add_argument(
-        '--epoch',
-        type=int,
-        default=201,
-        help='epoch number. default 201.')
-    parser.add_argument(
         '--data_dir',
         type=str,
         default='dataset/ModelNet40/modelnet40_ply_hdf5_2048',
@@ -120,7 +81,7 @@ def parse_args():
     parser.add_argument(
         '--save_dir',
         type=str,
-        default='checkpoints_cls',
+        default='output',
         help='directory name to save train snapshoot')
     parser.add_argument(
         '--resume',
@@ -141,54 +102,6 @@ def parse_args():
     args = parser.parse_args()
     return args
 
-def save_vars(executor, dirname, program=None, vars=None):
-    """
-    Temporary resolution for Win save variables compatability.
-
-    """
-
-    save_program = fluid.Program()
-    save_block = save_program.global_block()
-
-    for each_var in vars:
-        # NOTE: don't save the variable which type is RAW
-        if each_var.type == fluid.core.VarDesc.VarType.RAW:
-            continue
-        new_var = save_block.create_var(
-            name=each_var.name,
-            shape=each_var.shape,
-            dtype=each_var.dtype,
-            type=each_var.type,
-            lod_level=each_var.lod_level,
-            persistable=True)
-        file_path = os.path.join(dirname, new_var.name)
-        file_path = os.path.normpath(file_path)
-        save_block.append_op(
-            type='save',
-            inputs={'X': [new_var]},
-            outputs={},
-            attrs={'file_path': file_path})
-
-    executor.run(save_program)
-
-
-def save_checkpoint(exe, program, path):
-    """
-    Save checkpoint for evaluation or resume training
-    """
-    ckpt_dir = path
-    print("Save model checkpoint to {}".format(ckpt_dir))
-    if not os.path.isdir(ckpt_dir):
-        os.makedirs(ckpt_dir)
-
-    save_vars(
-        exe,
-        ckpt_dir,
-        program,
-        vars=list(filter(fluid.io.is_persistable, program.list_vars())))
-
-    return ckpt_dir
-
 
 def train():
     """main train"""
@@ -204,15 +117,16 @@ def train():
     assert args.backbone in ['DenseNet121', 'ResNet101'], \
             "--backbone unsupported" 
 
-    # pdb.set_trace()
+    # conf init
     conf = core.init_config(args.conf)
     paths = core.init_training_paths(args.conf)
 
     # get reader and anchor
     m3drpn_reader = M3drpnReader(conf, args.data_dir)
-    print("conf.batch_size",conf.batch_size)
+    epoch = conf.max_iter / (m3drpn_reader.len) + 1
     train_reader = m3drpn_reader.get_reader(conf.batch_size, mode='train')
     generate_anchors(conf, m3drpn_reader.data['train'], paths.output)
+    compute_bbox_stats(conf, m3drpn_reader.data['train'], paths.output)
 
     # train
     place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
@@ -228,24 +142,40 @@ def train():
 
         if args.use_data_parallel:
             strategy = fluid.dygraph.parallel.prepare_context()
-
         
+        # -----------------------------------------
+        # network and loss
+        # -----------------------------------------
+
+        # training network
         train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output)
+        
+        # setup loss
+        criterion_det = RPN_3D_loss(conf)
+        
         if args.use_data_parallel:
             train_model = fluid.dygraph.parallel.DataParallel(train_model, strategy)
-
         
         if args.use_data_parallel:
             train_reader = fluid.contrib.reader.distributed_batch_reader(
                 train_reader)
-        #pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
-        #state_dict = train_model.state_dict()
-        #Convert
-        #train_model.set_dict()
-
+        # # pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
+        # #state_dict = train_model.state_dict()
+        # #Convert
+        # #TODO load pretrained model
+        
+        
+        # if os.path.exists(conf.pretrained):
+        #     print("load pretrain model from ", conf.pretrained)
+        #     pretrained, _ = fluid.load_dygraph(conf.pretrained)
+        #     train_model.base.set_dict(pretrained, use_structured_name=True)
+        #     #train_model.set_dict(pretrained, use_structured_name=True)
+        # dict = train_model.state_dict()
+        # fluid.save_dygraph(dict, "paddle")
+        
         total_batch_num = 0
 
-        for eop in range(args.epoch):
+        for eop in range(int(epoch)):
             
             total_loss = 0.0
             total_acc1 = 0.0
@@ -253,59 +183,58 @@ def train():
             total_sample = 0
             
             for batch_id, data in enumerate(train_reader()):
-                #print("data", data)
+                
                 #NOTE: used in benchmark
                 # if args.max_iter and total_batch_num == args.max_iter:
                 #     return
                 batch_start = time.time()
                 
-                dy_x_data = np.array(
+                images = np.array(
                     [x[0].reshape(3, 512, 1760) for x in data]).astype('float32')
-                # if len(np.array([x[1]
-                #                  for x in data]).astype('int64')) != batch_size:
-                #     continue
-                # y_data = np.array([x[1] for x in data]).astype('int64').reshape(
-                #     -1, 1)
-
-                img = to_variable(dy_x_data)
+                imobjs = np.array([x[1] for x in data])
+                
+                #  learning rate
+                # cur_iter = eop*100 + batch_id # TODO next_iter
+                # adjust_lr(conf, optimizer, cur_iter) 
+                
+                if len(np.array([x[1] for x in data])) != conf.batch_size:
+                    continue
+                
+                img = to_variable(images)
                 # label = to_variable(y_data)
                 # label.stop_gradient = True
-
-                out = train_model(img)
                 
-                # loss = fluid.layers.cross_entropy(input=out, label=label)
-                # avg_loss = fluid.layers.mean(x=loss)
-
-                # acc_top1 = fluid.layers.accuracy(input=out, label=label, k=1)
+                cls, prob, bbox_2d, bbox_3d, feat_size = train_model(img)
                 
+                # # loss
+                det_loss, det_stats = criterion_det(cls, prob, bbox_2d, bbox_3d, imobjs, feat_size)
+        
+                total_loss = det_loss
+                stats = det_stats
+                
+                # backprop
+                if total_loss > 0:
+                    if args.use_data_parallel:
+                        train_loss = train_model.scale_loss(train_loss)
+                        train_loss.backward()
+                        train_model.apply_collective_grads()
+                    else:
+                        total_loss.backward()
 
-                # dy_out = avg_loss.numpy()
-
-                # if args.use_data_parallel:
-                #     avg_loss = train_model.scale_loss(avg_loss)
-                #     avg_loss.backward()
-                #     train_model.apply_collective_grads()
-                # else:
-                #     avg_loss.backward()
-
-                # optimizer.minimize(avg_loss)
-                # train_model.clear_gradients()
-
+                    # batch skip, simulates larger batches by skipping gradient step
+                    if (not 'batch_skip' in conf) or ((batch_id + 1) % conf.batch_skip) == 0:
+                        optimizer.minimize(total_loss)
+                        optimizer.clear_gradients()
+                        
                 batch_end = time.time()
                 train_batch_cost = batch_end - batch_start
-                # total_loss += dy_out
-                # total_acc1 += acc_top1.numpy()
-                
-                total_sample += 1
-                total_batch_num = total_batch_num + 1 #this is for benchmark
-                #print("epoch id: %d, batch step: %d, loss: %f" % (eop, batch_id, dy_out))
-                if batch_id % 10 == 0:
-                    print( "epoch %d | batch step %d , batch cost: %.5f" % \
-                           ( eop, batch_id, train_batch_cost))
-                    # print( "epoch %d | batch step %d, loss %0.3f acc1 %0.3f , batch cost: %.5f" % \
-                    #        ( eop, batch_id, total_loss / total_sample, \
-                    #          total_acc1 / total_sample,  train_batch_cost))
-
+               
+                if batch_id % conf.display == 0:
+                    print( "epoch %d | batch step %d, batch cost: %.5f, loss %0.3f" % \
+                           (eop, batch_id,  train_batch_cost, total_loss.numpy()))
+                    
+            # snapshot, do_test TODO
+            
             # if args.ce:
             #     print("kpis\ttrain_acc1\t%0.3f" % (total_acc1 / total_sample))
                
@@ -315,12 +244,12 @@ def train():
             #        total_acc1 / total_sample))
             
 
-            # save_parameters = (not args.use_data_parallel) or (
-            #     args.use_data_parallel and
-            #     fluid.dygraph.parallel.Env().local_rank == 0)
-            # if save_parameters:
-            #     fluid.save_dygraph(train_model.state_dict(),
-            #                                     '_params')
+            save_parameters = (not args.use_data_parallel) or (
+                 args.use_data_parallel and
+                 fluid.dygraph.parallel.Env().local_rank == 0)
+            if save_parameters:
+                 fluid.save_dygraph(train_model.state_dict(),
+                                                 '_params')
 
 if __name__ == '__main__':
 

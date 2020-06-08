@@ -23,7 +23,7 @@ def Config():
     conf.weight_decay = 0.0005
     conf.max_iter = 50000
     conf.snapshot_iter = 10000
-    conf.display = 250
+    conf.display = 20
     conf.do_test = True
     
     # sgd parameters
@@ -133,7 +133,7 @@ def Config():
     # visdom
     conf.visdom_port = 8100
     
-    conf.pretrained = 'checkpoints_cls/0/'
+    conf.pretrained = 'paddle.pdparams'
 
     return conf
 

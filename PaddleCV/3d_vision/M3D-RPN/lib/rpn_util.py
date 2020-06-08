@@ -608,164 +608,164 @@ def clsName2Ind(lbls, cls):
         raise ValueError('unknown class')
 
 
-# def compute_bbox_stats(conf, imdb, cache_folder=''):
-#     """
-#     Computes the mean and standard deviation for each regression
-#     parameter (usually pertaining to [dx, dy, sw, sh] but sometimes
-#     for 3d parameters too).
+def compute_bbox_stats(conf, imdb, cache_folder=''):
+    """
+    Computes the mean and standard deviation for each regression
+    parameter (usually pertaining to [dx, dy, sw, sh] but sometimes
+    for 3d parameters too).
 
-#     Once these stats are known we normalize the regression targets
-#     to have 0 mean and 1 variance, to hypothetically ease training.
-#     """
+    Once these stats are known we normalize the regression targets
+    to have 0 mean and 1 variance, to hypothetically ease training.
+    """
 
-#     if (cache_folder is not None) and os.path.exists(os.path.join(cache_folder, 'bbox_means.pkl')) \
-#             and os.path.exists(os.path.join(cache_folder, 'bbox_stds.pkl')):
+    if (cache_folder is not None) and os.path.exists(os.path.join(cache_folder, 'bbox_means.pkl')) \
+            and os.path.exists(os.path.join(cache_folder, 'bbox_stds.pkl')):
 
-#         means = pickle_read(os.path.join(cache_folder, 'bbox_means.pkl'))
-#         stds = pickle_read(os.path.join(cache_folder, 'bbox_stds.pkl'))
+        means = pickle_read(os.path.join(cache_folder, 'bbox_means.pkl'))
+        stds = pickle_read(os.path.join(cache_folder, 'bbox_stds.pkl'))
 
-#     else:
+    else:
 
-#         if conf.has_3d:
-#             squared_sums = np.zeros([1, 11], dtype=np.float128)
-#             sums = np.zeros([1, 11], dtype=np.float128)
-#         else:
-#             squared_sums = np.zeros([1, 4], dtype=np.float128)
-#             sums = np.zeros([1, 4], dtype=np.float128)
+        if conf.has_3d:
+            squared_sums = np.zeros([1, 11], dtype=np.float128)
+            sums = np.zeros([1, 11], dtype=np.float128)
+        else:
+            squared_sums = np.zeros([1, 4], dtype=np.float128)
+            sums = np.zeros([1, 4], dtype=np.float128)
 
-#         class_counts = np.zeros([1], dtype=np.float128) + 1e-10
+        class_counts = np.zeros([1], dtype=np.float128) + 1e-10
 
-#         # compute the mean first
-#         logging.info('Computing bbox regression mean..')
+        # compute the mean first
+        logging.info('Computing bbox regression mean..')
 
-#         for imind, imobj in enumerate(imdb):
+        for imind, imobj in enumerate(imdb):
 
-#             if len(imobj.gts) > 0:
+            if len(imobj.gts) > 0:
 
-#                 scale_factor = imobj.scale * conf.test_scale / imobj.imH
-#                 feat_size = calc_output_size(np.array([imobj.imH, imobj.imW]) * scale_factor, conf.feat_stride)
-#                 rois = locate_anchors(conf.anchors, feat_size, conf.feat_stride)
+                scale_factor = imobj.scale * conf.test_scale / imobj.imH
+                feat_size = calc_output_size(np.array([imobj.imH, imobj.imW]) * scale_factor, conf.feat_stride)
+                rois = locate_anchors(conf.anchors, feat_size, conf.feat_stride)
 
-#                 # determine ignores
-#                 igns, rmvs = determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis,
-#                                                conf.min_gt_h, np.inf, scale_factor)
+                # determine ignores
+                igns, rmvs = determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis,
+                                               conf.min_gt_h, np.inf, scale_factor)
 
-#                 # accumulate boxes
-#                 gts_all = bbXYWH2Coords(np.array([gt.bbox_full * scale_factor for gt in imobj.gts]))
+                # accumulate boxes
+                gts_all = bbXYWH2Coords(np.array([gt.bbox_full * scale_factor for gt in imobj.gts]))
 
-#                 # filter out irrelevant cls, and ignore cls
-#                 gts_val = gts_all[(rmvs == False) & (igns == False), :]
-#                 gts_ign = gts_all[(rmvs == False) & (igns == True), :]
+                # filter out irrelevant cls, and ignore cls
+                gts_val = gts_all[(rmvs == False) & (igns == False), :]
+                gts_ign = gts_all[(rmvs == False) & (igns == True), :]
 
-#                 # accumulate labels
-#                 box_lbls = np.array([gt.cls for gt in imobj.gts])
-#                 box_lbls = box_lbls[(rmvs == False) & (igns == False)]
-#                 box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
+                # accumulate labels
+                box_lbls = np.array([gt.cls for gt in imobj.gts])
+                box_lbls = box_lbls[(rmvs == False) & (igns == False)]
+                box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
 
-#                 if conf.has_3d:
+                if conf.has_3d:
 
-#                     # accumulate 3d boxes
-#                     gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
-#                     gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
+                    # accumulate 3d boxes
+                    gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
+                    gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
 
-#                     # rescale centers (in 2d)
-#                     for gtind, gt in enumerate(gts_3d):
-#                         gts_3d[gtind, 0:2] *= scale_factor
+                    # rescale centers (in 2d)
+                    for gtind, gt in enumerate(gts_3d):
+                        gts_3d[gtind, 0:2] *= scale_factor
 
-#                     # compute transforms for all 3d
-#                     transforms, _, _= compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
-#                                                     conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
-#                                                     anchors=conf.anchors, tracker=rois[:, 4])
-#                 else:
+                    # compute transforms for all 3d
+                    transforms, _, _= compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                    conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
+                                                    anchors=conf.anchors, tracker=rois[:, 4])
+                else:
 
-#                     # compute transforms for 2d
-#                     transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
-#                                                     conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh)
+                    # compute transforms for 2d
+                    transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                    conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh)
 
-#                 gt_inds = np.flatnonzero(transforms[:, 4] > 0)
+                gt_inds = np.flatnonzero(transforms[:, 4] > 0)
 
-#                 if len(gt_inds) > 0:
+                if len(gt_inds) > 0:
 
-#                     if conf.has_3d:
-#                         sums[:, 0:4] += np.sum(transforms[gt_inds, 0:4], axis=0)
-#                         sums[:, 4:] += np.sum(transforms[gt_inds, 5:12], axis=0)
-#                     else:
-#                         sums += np.sum(transforms[gt_inds, 0:4], axis=0)
+                    if conf.has_3d:
+                        sums[:, 0:4] += np.sum(transforms[gt_inds, 0:4], axis=0)
+                        sums[:, 4:] += np.sum(transforms[gt_inds, 5:12], axis=0)
+                    else:
+                        sums += np.sum(transforms[gt_inds, 0:4], axis=0)
 
-#                     class_counts += len(gt_inds)
+                    class_counts += len(gt_inds)
 
-#         means = sums/class_counts
+        means = sums/class_counts
 
-#         logging.info('Computing bbox regression stds..')
+        logging.info('Computing bbox regression stds..')
 
-#         for imobj in imdb:
+        for imobj in imdb:
 
-#             if len(imobj.gts) > 0:
+            if len(imobj.gts) > 0:
 
-#                 scale_factor = imobj.scale * conf.test_scale / imobj.imH
-#                 feat_size = calc_output_size(np.array([imobj.imH, imobj.imW]) * scale_factor, conf.feat_stride)
-#                 rois = locate_anchors(conf.anchors, feat_size, conf.feat_stride)
+                scale_factor = imobj.scale * conf.test_scale / imobj.imH
+                feat_size = calc_output_size(np.array([imobj.imH, imobj.imW]) * scale_factor, conf.feat_stride)
+                rois = locate_anchors(conf.anchors, feat_size, conf.feat_stride)
 
-#                 # determine ignores
-#                 igns, rmvs = determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis, conf.min_gt_h, np.inf, scale_factor)
+                # determine ignores
+                igns, rmvs = determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis, conf.min_gt_h, np.inf, scale_factor)
 
-#                 # accumulate boxes
-#                 gts_all = bbXYWH2Coords(np.array([gt.bbox_full * scale_factor for gt in imobj.gts]))
+                # accumulate boxes
+                gts_all = bbXYWH2Coords(np.array([gt.bbox_full * scale_factor for gt in imobj.gts]))
 
-#                 # filter out irrelevant cls, and ignore cls
-#                 gts_val = gts_all[(rmvs == False) & (igns == False), :]
-#                 gts_ign = gts_all[(rmvs == False) & (igns == True), :]
+                # filter out irrelevant cls, and ignore cls
+                gts_val = gts_all[(rmvs == False) & (igns == False), :]
+                gts_ign = gts_all[(rmvs == False) & (igns == True), :]
 
-#                 # accumulate labels
-#                 box_lbls = np.array([gt.cls for gt in imobj.gts])
-#                 box_lbls = box_lbls[(rmvs == False) & (igns == False)]
-#                 box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
+                # accumulate labels
+                box_lbls = np.array([gt.cls for gt in imobj.gts])
+                box_lbls = box_lbls[(rmvs == False) & (igns == False)]
+                box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
 
-#                 if conf.has_3d:
+                if conf.has_3d:
 
-#                     # accumulate 3d boxes
-#                     gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
-#                     gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
+                    # accumulate 3d boxes
+                    gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
+                    gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
 
-#                     # rescale centers (in 2d)
-#                     for gtind, gt in enumerate(gts_3d):
-#                         gts_3d[gtind, 0:2] *= scale_factor
+                    # rescale centers (in 2d)
+                    for gtind, gt in enumerate(gts_3d):
+                        gts_3d[gtind, 0:2] *= scale_factor
 
-#                     # compute transforms for all 3d
-#                     transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
-#                                                     conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
-#                                                     anchors=conf.anchors, tracker=rois[:, 4])
-#                 else:
+                    # compute transforms for all 3d
+                    transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                    conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
+                                                    anchors=conf.anchors, tracker=rois[:, 4])
+                else:
 
-#                     # compute transforms for 2d
-#                     transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
-#                                                     conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh)
+                    # compute transforms for 2d
+                    transforms, _, _ = compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                    conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh)
 
-#                 gt_inds = np.flatnonzero(transforms[:, 4] > 0)
+                gt_inds = np.flatnonzero(transforms[:, 4] > 0)
 
-#                 if len(gt_inds) > 0:
+                if len(gt_inds) > 0:
 
-#                     if conf.has_3d:
-#                         squared_sums[:, 0:4] += np.sum(np.power(transforms[gt_inds, 0:4] - means[:, 0:4], 2), axis=0)
-#                         squared_sums[:, 4:] += np.sum(np.power(transforms[gt_inds, 5:12] - means[:, 4:], 2), axis=0)
+                    if conf.has_3d:
+                        squared_sums[:, 0:4] += np.sum(np.power(transforms[gt_inds, 0:4] - means[:, 0:4], 2), axis=0)
+                        squared_sums[:, 4:] += np.sum(np.power(transforms[gt_inds, 5:12] - means[:, 4:], 2), axis=0)
 
-#                     else:
-#                         squared_sums += np.sum(np.power(transforms[gt_inds, 0:4] - means, 2), axis=0)
+                    else:
+                        squared_sums += np.sum(np.power(transforms[gt_inds, 0:4] - means, 2), axis=0)
 
 
-#         stds = np.sqrt((squared_sums/class_counts))
+        stds = np.sqrt((squared_sums/class_counts))
 
-#         means = means.astype(float)
-#         stds = stds.astype(float)
+        means = means.astype(float)
+        stds = stds.astype(float)
 
-#         logging.info('used {:d} boxes with avg std {:.4f}'.format(int(class_counts[0]), np.mean(stds)))
+        logging.info('used {:d} boxes with avg std {:.4f}'.format(int(class_counts[0]), np.mean(stds)))
 
-#         if (cache_folder is not None):
-#             pickle_write(os.path.join(cache_folder, 'bbox_means.pkl'), means)
-#             pickle_write(os.path.join(cache_folder, 'bbox_stds.pkl'), stds)
+        if (cache_folder is not None):
+            pickle_write(os.path.join(cache_folder, 'bbox_means.pkl'), means)
+            pickle_write(os.path.join(cache_folder, 'bbox_stds.pkl'), stds)
 
-#     conf.bbox_means = means
-#     conf.bbox_stds = stds
+    conf.bbox_means = means
+    conf.bbox_stds = stds
 
 
 def flatten_tensor(input): 

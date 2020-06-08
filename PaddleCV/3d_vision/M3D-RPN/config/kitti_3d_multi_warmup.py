@@ -23,7 +23,7 @@ def Config():
     conf.weight_decay = 0.0005
     conf.max_iter = 50000
     conf.snapshot_iter = 10000
-    conf.display = 250
+    conf.display = 20
     conf.do_test = True
     
     # sgd parameters
@@ -128,7 +128,7 @@ def Config():
     
     conf.hill_climbing = True
 
-    conf.pretrained = 'pretrained_model/densenet121/'
+    conf.pretrained = 'pretrained_model/densenet.pdparams'
     
     # visdom
     conf.visdom_port = 8100

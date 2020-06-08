@@ -11,6 +11,38 @@ from paddle.fluid.layer_helper import LayerHelper
 from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear
 from paddle.fluid.dygraph.container import Sequential
 
+def initial_type(name,
+                 input_channels,
+                 init="kaiming",
+                 use_bias=False,
+                 filter_size=0,
+                 stddev=0.02):
+    if init == "kaiming":
+        fan_in = input_channels * filter_size * filter_size
+        bound = 1 / math.sqrt(fan_in)
+        param_attr = fluid.ParamAttr(
+            name=name + "_weight",
+            initializer=fluid.initializer.Uniform(
+                low=-bound, high=bound))
+        if use_bias == True:
+            bias_attr = fluid.ParamAttr(
+                name=name + '_bias',
+                initializer=fluid.initializer.Uniform(
+                    low=-bound, high=bound))
+        else:
+            bias_attr = False
+    else:
+        param_attr = fluid.ParamAttr(
+            name=name + "_weight",
+            initializer=fluid.initializer.NormalInitializer(
+                loc=0.0, scale=stddev))
+        if use_bias == True:
+            bias_attr = fluid.ParamAttr(
+                name=name + "_bias", initializer=fluid.initializer.Constant(0.0))
+        else:
+            bias_attr = False
+    return param_attr, bias_attr
+
 class ConvLayer(fluid.dygraph.Layer):
     def __init__(self,
                  num_channels,
@@ -20,13 +52,19 @@ class ConvLayer(fluid.dygraph.Layer):
                  stride=1,
                  groups=None,
                  act=None,
-                 param_attr=None,
-                 bias_attr=None):
+                 name=None):
         super(ConvLayer, self).__init__()
+        
+        param_attr, bias_attr = initial_type(
+                    name=name,
+                    input_channels=num_channels,
+                    use_bias=True,
+                    filter_size=filter_size)
+        
         self.num_filters = num_filters
         self._conv = Conv2D(
-            num_channels=num_channels,#输入图像的通道数
-            num_filters=num_filters,#输出特征图个数
+            num_channels=num_channels,
+            num_filters=num_filters,
             filter_size=filter_size,
             padding=padding,
             stride=stride,
@@ -36,14 +74,10 @@ class ConvLayer(fluid.dygraph.Layer):
             bias_attr=bias_attr)
 
     def forward(self, inputs):
-        x = self._conv(inputs)
+        x = self._conv(inputs)        
         return x
 
 
-def dilate_layer(layer, val):
-    """dilate layer"""
-    layer.dilation = val
-    layer.padding = val
 
 class LocalConv2d(fluid.dygraph.Layer):
     """LocalConv2d"""
@@ -93,112 +127,82 @@ class RPN(fluid.dygraph.Layer):
         self.base = base
         
         del self.base.transition3.pool
+        
         # settings
         self.num_classes = len(conf['lbls']) + 1
         self.num_anchors = conf['anchors'].shape[0]
         self.num_rows = int(min(conf.bins, calc_output_size(conf.test_scale, conf.feat_stride)))
         self.phase = phase
-
-        # dilate
-        dilate_layer(self.base.denseblock4.denselayer1.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer2.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer3.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer4.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer5.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer6.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer7.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer8.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer9.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer10.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer11.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer12.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer13.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer14.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer15.conv2, 2)
-        dilate_layer(self.base.denseblock4.denselayer16.conv2, 2)
-
+        
         self.prop_feats = ConvLayer(num_channels = self.base.num_features, 
                                     num_filters=512,
                                     filter_size=3,
                                     padding=1,
                                     act='relu',
-                                    param_attr=ParamAttr(name='rpn_prop_feats_weights'),
-                                    bias_attr=ParamAttr(name='rpn_prop_feats_bias'))
+                                    name='rpn_prop_feats')
 
         # outputs
         self.cls = ConvLayer(num_channels = self.prop_feats.num_filters,
                              num_filters=self.num_classes * self.num_anchors,
                              filter_size=1,
-                             param_attr=ParamAttr(name='rpn_cls_weights'),
-                             bias_attr=ParamAttr(name='rpn_cls_bias'))
+                             name='rpn_cls')
         
         # bbox 2d
         self.bbox_x = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_x_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_x_bias'))
+                                name='rpn_bbox_x')
 
         self.bbox_y = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_y_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_y_bias'))
+                                name='rpn_bbox_y')
 
         self.bbox_w = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_w_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_w_bias'))
+                                name='rpn_bbox_w')
 
         self.bbox_h = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_h_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_h_bias'))
+                                name='rpn_bbox_h')
         
         # bbox 3d
         self.bbox_x3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_x3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_x3d_bias'))
+                                name='rpn_bbox_x3d')
 
         self.bbox_y3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_y3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_y3d_bias'))
+                                name='rpn_bbox_y3d')
 
         self.bbox_z3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_z3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_z3d_bias'))
+                                name='rpn_bbox_z3d')
 
         self.bbox_w3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_w3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_w3d_bias'))
+                                name='rpn_bbox_w3d')
 
         self.bbox_h3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_h3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_h3d_bias'))
+                                name='rpn_bbox_h3d')
 
         self.bbox_l3d = ConvLayer(num_channels = self.prop_feats.num_filters,
                                 num_filters=self.num_anchors,
                                 filter_size=1,
-                                param_attr=ParamAttr(name='rpn_bbox_l3d_weights'),
-                                bias_attr=ParamAttr(name='rpn_bbox_l3d_bias'))
+                                name='rpn_bbox_l3d')
 
         self.bbox_rY3d = ConvLayer(num_channels = self.prop_feats.num_filters,
-                                    num_filters=self.num_anchors,
-                                    filter_size=1,
-                                    param_attr=ParamAttr(name='rpn_bbox_rY3d_weights'),
-                                    bias_attr=ParamAttr(name='rpn_bbox_rY3d_bias'))
+                                   num_filters=self.num_anchors,
+                                   filter_size=1,
+                                   name='rpn_bbox_rY3d')
 
         self.prop_feats_loc = LocalConv2d(self.num_rows, self.base.num_features, 512, 3, padding=1,
                                      param_attr=ParamAttr(name='rpn_prop_feats_weights_loc'),
@@ -345,6 +349,7 @@ class RPN(fluid.dygraph.Layer):
         bbox_rY3d = (bbox_rY3d * bbox_rY3d_ble) + (bbox_rY3d_loc * (1 - bbox_rY3d_ble))
 
         batch_size, c, feat_h, feat_w = cls.shape
+        feat_size = fluid.layers.shape(cls)[2:4]
         # reshape for cross entropy
         cls = fluid.layers.reshape(x=cls, shape=[batch_size, self.num_classes, feat_h * self.num_anchors, feat_w])
         # score probabilities
@@ -367,10 +372,7 @@ class RPN(fluid.dygraph.Layer):
         # bundle
         bbox_2d = fluid.layers.concat(input=[bbox_x, bbox_y, bbox_w, bbox_h], axis=2)
         bbox_3d = fluid.layers.concat(input=[bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d], axis=2)
-
-        feat_size = fluid.layers.shape(cls)[2:4]
-        #feat_size = [feat_h, feat_w]
-
+        
         cls = flatten_tensor(cls)
         prob = flatten_tensor(prob)
 
@@ -404,60 +406,38 @@ def build(conf, backbone, phase='train'):
     # RPN
     rpn_net = RPN(phase, backbone_res.features, conf) 
 
-    #TODO
-    '''
+    
+    # pretrain
     if 'pretrained' in conf and conf.pretrained is not None:
-        src_weights = torch.load(conf.pretrained)
-        src_keylist = list(src_weights.keys())
-
-        conv_layers = ['cls', 'bbox_x', 'bbox_y', 'bbox_w', 'bbox_h', 'bbox_x3d', 'bbox_y3d', 'bbox_w3d', 'bbox_h3d', 'bbox_l3d', 'bbox_z3d', 'bbox_rY3d']
-
-        # prop_feats
-        src_weight_key = 'module.{}.0.weight'.format('prop_feats')
-        src_bias_key = 'module.{}.0.bias'.format('prop_feats')
-
-        dst_weight_key = 'module.{}.0.group_conv.weight'.format('prop_feats_loc')
-        dst_bias_key = 'module.{}.0.group_conv.bias'.format('prop_feats_loc')
-
-        src_weights[dst_weight_key] = src_weights[src_weight_key].repeat(conf.bins, 1, 1, 1)
-        src_weights[dst_bias_key] = src_weights[src_bias_key].repeat(conf.bins, )
-
-        #del src_weights[src_weight_key]
-        #del src_weights[src_bias_key]
+        print("load pretrain model from ", conf.pretrained)
+        src_weights, _ = fluid.load_dygraph(conf.pretrained)
+        
+        conv_layers = ['prop_feats', 'cls', 'bbox_x', 'bbox_y', 'bbox_w', 'bbox_h', 'bbox_x3d', 'bbox_y3d', 'bbox_w3d', 'bbox_h3d', 'bbox_l3d', 'bbox_z3d', 'bbox_rY3d']
 
         for layer in conv_layers:
-            src_weight_key = 'module.{}.weight'.format(layer)
-            src_bias_key = 'module.{}.bias'.format(layer)
+            src_weight_key = '{}._conv.weight'.format(layer)
+            src_bias_key = '{}._conv.bias'.format(layer)
 
-            dst_weight_key = 'module.{}.group_conv.weight'.format(layer+'_loc')
-            dst_bias_key = 'module.{}.group_conv.bias'.format(layer+'_loc')
+            dst_weight_key = '{}.group_conv.weight'.format(layer+'_loc')
+            dst_bias_key = '{}.group_conv.bias'.format(layer+'_loc')
 
-            src_weights[dst_weight_key] = src_weights[src_weight_key].repeat(conf.bins, 1, 1, 1)
-            src_weights[dst_bias_key] = src_weights[src_bias_key].repeat(conf.bins, )
-
-            #del src_weights[src_weight_key]
-            #del src_weights[src_bias_key]
+            src_weights[dst_weight_key] = np.repeat(src_weights[src_weight_key], conf.bins, axis=0)   
+            src_weights[dst_bias_key] = np.repeat(src_weights[src_bias_key], conf.bins, axis=0)
 
         src_keylist = list(src_weights.keys())
+        dst_keylist = list(rpn_net.state_dict().keys())
+        for key in dst_keylist:
+            if key not in src_keylist:
+                src_weights[key] = rpn_net.state_dict()[key]
+    
+        rpn_net.set_dict(src_weights, use_structured_name=True)
 
-        # rename layers without module..
-        for key in src_keylist:
-
-            key_new = key.replace('module.', '')
-            if key_new in dst_keylist:
-                src_weights[key_new] = src_weights[key]
-                del src_weights[key]
-
-        src_keylist = list(src_weights.keys())
-    '''
-
-
-
+    
     if train: rpn_net.train()
     else: rpn_net.eval()
     
     return rpn_net
-
+    
 
 
 
