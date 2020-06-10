@@ -166,6 +166,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         bbox_l3d_dn = fluid.layers.exp(bbox_l3d_dn) * bbox_l3d_unsqueeze
         bbox_ry3d_dn = bbox_ry3d_unsqueeze + bbox_ry3d_dn
 
+        ious_2d_var_list = []
         for bind in range(0, batch_size):
 
             imobj = imobjs[bind]
@@ -303,19 +304,26 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                                                    axis=1).astype('float32')
 
                     # move to gpu
-                    # deltas_2d_tar = to_variable(deltas_2d_tar)
-                    # deltas_2d_tar.stop_gradient = True
+                    deltas_2d_tar = to_variable(deltas_2d_tar)
+                    deltas_2d_tar.stop_gradient = True
 
                     means = self.bbox_means[0, :]
                     stds = self.bbox_stds[0, :]
 
                     #rois = rois.cuda()
-                    #nparray
-                    coords_2d = bbox_transform_inv(rois, deltas_2d.numpy(), means=means, stds=stds)
+                    #variable
+                    coords_2d = bbox_transform_inv(rois, deltas_2d, means=means, stds=stds)
                     coords_2d_tar = bbox_transform_inv(rois, deltas_2d_tar, means=means, stds=stds)
 
-                    #nparray
-                    ious_2d[bind, fg_inds] = iou(coords_2d[fg_inds, :], coords_2d_tar[fg_inds, :], mode='list')
+                    #vaiable
+                    #coords_2d_fg = fluid.layers.gather(coords_2d, to_variable(fg_inds))
+                    #coords_2d_tar_fg = fluid.layers.gather(coords_2d_tar, to_variable(fg_inds))
+                    ious_2d_var = iou(coords_2d, coords_2d_tar, mode='list')
+                    ious_2d_var_shape = ious_2d_var.shape
+                    ious_2d_fg_mask = np.zeros(ious_2d_var_shape).astype('float32')
+                    ious_2d_fg_mask[fg_inds] = 1
+                    ious_2d_var = ious_2d_var * to_variable(ious_2d_fg_mask)
+                    ious_2d_var_list.append(ious_2d_var)
 
                     bbox_x3d_dn_fg = bbox_x3d_dn.numpy()[bind, fg_inds]
                     bbox_y3d_dn_fg = bbox_y3d_dn.numpy()[bind, fg_inds]
@@ -760,11 +768,13 @@ class RPN_3D_loss(fluid.dygraph.Layer):
             coords_abs_ry_mean = fluid.layers.mean(coords_abs_ry)
             stats.append({'name': 'ry', 'val': coords_abs_ry_mean.numpy(), 'format': '{:0.2f}', 'group': 'misc'})
 
-            #ious_2d = fluid.layers.reshape(ious_2d, shape=[-1])
-            ious_2d = ious_2d.view().astype('float32')
-            ious_2d.shape = np.product(ious_2d.shape)
-            ious_2d_active = ious_2d[active]
-            ious_2d_active = to_variable(ious_2d_active)
+            ious_2d = fluid.layers.concat(ious_2d_var_list, axis=0)
+            ious_2d = fluid.layers.reshape(ious_2d, shape=[-1])
+            #ious_2d = ious_2d.view().astype('float32')
+            #ious_2d.shape = np.product(ious_2d.shape)
+            #ious_2d_active = ious_2d[active]
+            #ious_2d_active = to_variable(ious_2d_active)
+            ious_2d_active = fluid.layers.gather(ious_2d, active_index_var)
             ious_2d_mean = fluid.layers.mean(ious_2d_active)
             stats.append({'name': 'iou', 'val': ious_2d_mean.numpy(), 'format': '{:0.2f}', 'group': 'acc'})
 
