@@ -20,9 +20,10 @@ import numpy as np
 import pdb
 import cv2
 import paddle
-from paddle.fluid.dygraph.base import to_variable
 from paddle.fluid import framework
 
+import paddle.fluid as fluid
+from paddle.fluid.dygraph import to_variable
 
 def generate_anchors(conf, imdb, cache_folder):
     """
@@ -988,7 +989,7 @@ def bbox_transform(ex_rois, gt_rois):
     ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0
     ex_ctr_x = ex_rois[:, 0] + 0.5 * (ex_widths - 1)
     ex_ctr_y = ex_rois[:, 1] + 0.5 * (ex_heights - 1)
-
+    
     gt_widths = gt_rois[:, 2] - gt_rois[:, 0] + 1.0
     gt_heights = gt_rois[:, 3] - gt_rois[:, 1] + 1.0
     gt_ctr_x = gt_rois[:, 0] + 0.5 * (gt_widths - 1.0)
@@ -1005,60 +1006,77 @@ def bbox_transform(ex_rois, gt_rois):
 
 
 def bbox_transform_inv(boxes, deltas, means=None, stds=None):
-     """
-     Compute the bbox target transforms in 3D.
+    """
+    Compute the bbox target transforms in 3D.
+    Translations are done as simple difference, whereas others involving
+    scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+    log(1.2) > 0 which is a good property).
+ 
+    Args:
+        bboxes (nparray): N x 5 array describing [x1, y1, x2, y2, anchor_index]
+        deltas (nparray): N x 4 array describing [dx, dy, dw, dh]
+    return: bbox target transforms in 3D (nparray) 
+    """
 
-     Translations are done as simple difference, whereas others involving
-     scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
-     log(1.2) > 0 which is a good property).
-  
-     Args:
-         bboxes (nparray): N x 5 array describing [x1, y1, x2, y2, anchor_index]
-         deltas (nparray): N x 4 array describing [dx, dy, dw, dh]
-     return: bbox target transforms in 3D (nparray) 
-     """
+    if boxes.shape[0] == 0:
+        return np.zeros((0, deltas.shape[1]), dtype=deltas.dtype)
+    
+    # boxes = boxes.astype(deltas.dtype, copy=False)
+    data_type = type(deltas)
+    if data_type == paddle.fluid.core_avx.VarBase:
+        boxes = to_variable(boxes)
 
-     if boxes.shape[0] == 0:
-         return np.zeros((0, deltas.shape[1]), dtype=deltas.dtype)
+    widths = boxes[:, 2] - boxes[:, 0] + 1.0
+    heights = boxes[:, 3] - boxes[:, 1] + 1.0
+    ctr_x = boxes[:, 0] + 0.5 * widths
+    ctr_y = boxes[:, 1] + 0.5 * heights
 
-     # boxes = boxes.astype(deltas.dtype, copy=False)
+    dx = deltas[:, 0]
+    dy = deltas[:, 1]
+    dw = deltas[:, 2]
+    dh = deltas[:, 3]
 
-     widths = boxes[:, 2] - boxes[:, 0] + 1.0
-     heights = boxes[:, 3] - boxes[:, 1] + 1.0
-     ctr_x = boxes[:, 0] + 0.5 * widths
-     ctr_y = boxes[:, 1] + 0.5 * heights
+    if stds is not None:
+        dx *= stds[0]
+        dy *= stds[1]
+        dw *= stds[2]
+        dh *= stds[3]
 
-     dx = deltas[:, 0]
-     dy = deltas[:, 1]
-     dw = deltas[:, 2]
-     dh = deltas[:, 3]
+    if means is not None:
+        dx += means[0]
+        dy += means[1]
+        dw += means[2]
+        dh += means[3]
 
-     if stds is not None:
-         dx *= stds[0]
-         dy *= stds[1]
-         dw *= stds[2]
-         dh *= stds[3]
+    if data_type == np.ndarray:
+        pred_ctr_x = dx * widths + ctr_x
+        pred_ctr_y = dy * heights + ctr_y
+        pred_w = np.exp(dw) * widths
+        pred_h = np.exp(dh) * heights
 
-     if means is not None:
-         dx += means[0]
-         dy += means[1]
-         dw += means[2]
-         dh += means[3]
+        pred_boxes = np.zeros(deltas.shape)     
 
-     pred_ctr_x = dx * widths + ctr_x
-     pred_ctr_y = dy * heights + ctr_y
-     pred_w = np.exp(dw) * widths
-     pred_h = np.exp(dh) * heights
+        # x1, y1, x2, y2
+        pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
+        pred_boxes[:, 1] = pred_ctr_y - 0.5 * pred_h
+        pred_boxes[:, 2] = pred_ctr_x + 0.5 * pred_w
+        pred_boxes[:, 3] = pred_ctr_y + 0.5 * pred_h
 
-     pred_boxes = np.zeros(deltas.shape)     
+        return pred_boxes
+    elif data_type == paddle.fluid.core_avx.VarBase:
+        pred_ctr_x = dx * widths + ctr_x
+        pred_ctr_y = dy * heights + ctr_y
+        pred_w = fluid.layers.exp(dw) * widths
+        pred_h = fluid.layers.exp(dh) * heights
 
-     # x1, y1, x2, y2
-     pred_boxes[:, 0] = pred_ctr_x - 0.5 * pred_w
-     pred_boxes[:, 1] = pred_ctr_y - 0.5 * pred_h
-     pred_boxes[:, 2] = pred_ctr_x + 0.5 * pred_w
-     pred_boxes[:, 3] = pred_ctr_y + 0.5 * pred_h
-
-     return pred_boxes
+        pred_x1 = fluid.layers.unsqueeze(pred_ctr_x - 0.5 * pred_w, 1)
+        pred_y1 = fluid.layers.unsqueeze(pred_ctr_y - 0.5 * pred_h, 1)
+        pred_x2 = fluid.layers.unsqueeze(pred_ctr_x + 0.5 * pred_w, 1)
+        pred_y2 = fluid.layers.unsqueeze(pred_ctr_y + 0.5 * pred_h, 1)
+        pred_boxes = fluid.layers.concat(input=[pred_x1, pred_y1, pred_x2, pred_y2], axis=1)
+        return pred_boxes
+    else:
+        raise ValueError('unknown data type {}'.format(data_type))
 
 
 def determine_ignores(gts, lbls, ilbls, min_gt_vis=0.99, min_gt_h=0, max_gt_h=10e10, scale_factor=1):

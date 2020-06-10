@@ -19,6 +19,7 @@ import random
 #import visdom
 #import torch
 import paddle.fluid as fluid
+import paddle
 import shutil
 import sys
 import os
@@ -187,13 +188,13 @@ def intersect(box_a, box_b, mode='combinations', data_type=None):
     elif mode == 'list':
 
         # torch.Tesnor
-        # if data_type == torch.Tensor:
-        #     max_xy = torch.min(box_a[:, 2:], box_b[:, 2:])
-        #     min_xy = torch.max(box_a[:, :2], box_b[:, :2])
-        #     inter = torch.clamp((max_xy - min_xy), 0)
+        if data_type == fluid.core_avx.VarBase:
+            max_xy = fluid.layers.elementwise_min(box_a[:, 2:], box_b[:, 2:])
+            min_xy = fluid.layers.elementwise_max(box_a[:, :2], box_b[:, :2])
+            inter = fluid.layers.clamp((max_xy - min_xy), 0)
 
         # np.ndarray
-        if data_type == np.ndarray:
+        elif data_type == np.ndarray:
             max_xy = np.minimum(box_a[:, 2:], box_b[:, 2:])
             min_xy = np.maximum(box_a[:, :2], box_b[:, :2])
             inter = np.clip((max_xy - min_xy), a_min=0, a_max=None)
