@@ -33,7 +33,7 @@ import time
 import re
 from PIL import Image
 import lib.util as util
-import lib.rpn_util as rpn_util
+from lib.rpn_util import *
 import data.augmentations as augmentations
 
 from easydict import EasyDict as edict
@@ -331,7 +331,7 @@ def balance_samples(conf, imdb):
             valid = 0
 
             scale = conf.test_scale / imobj.imH
-            igns, rmvs = rpn_util.determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis,
+            igns, rmvs = determine_ignores(imobj.gts, conf.lbls, conf.ilbls, conf.min_gt_vis,
                                            conf.min_gt_h, conf.max_gt_h, scale)
 
             for gtind, gt in enumerate(imobj.gts):
@@ -505,7 +505,7 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
             if use_3d_for_2d and h3d > 0 and w3d > 0 and l3d > 0:
 
                 # re-compute the 2D box using 3D (finally, avoids clipped boxes)
-                verts3d, corners_3d = rpn_util.project_3d(p2, cx3d, cy3d, cz3d, w3d, h3d, l3d, rotY, return_3d=True)
+                verts3d, corners_3d = project_3d(p2, cx3d, cy3d, cz3d, w3d, h3d, l3d, rotY, return_3d=True)
 
                 # any boxes behind camera plane?
                 if np.any(corners_3d[2, :] <= 0):
