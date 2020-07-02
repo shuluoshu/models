@@ -14,7 +14,7 @@
 """
 init
 """
-from . import d4lcn_reader
+from . import m3drpn_reader
 #from .m3drpn_reader import *
 
 #__all__ = m3drpn_reader.__all__

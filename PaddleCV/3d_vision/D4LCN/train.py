@@ -58,15 +58,15 @@ def parse_args():
     #     default=False,
     #     help="The flag indicating whether to use data parallel mode to train the model."
     # )
-    parser.add_argument(
-        '--backbone',
-        type=str,
-        default='DenseNet121',
-        help='backbone model to train, default DenseNet121')
+    # parser.add_argument(
+    #     '--backbone',
+    #     type=str,
+    #     default='DenseNet121',
+    #     help='backbone model to train, default DenseNet121')
     parser.add_argument(
         '--conf',
         type=str,
-        default='depth_guided_config',
+        default='kitti_3d_multi_main',
         help='config')
     parser.add_argument(
         '--use_gpu',
@@ -114,8 +114,8 @@ def train():
     if not os.path.isdir(args.save_dir):
         os.makedirs(args.save_dir)
 
-    assert args.backbone in ['DenseNet121', 'ResNet101'], \
-            "--backbone unsupported" 
+    # assert args.backbone in ['DenseNet121', 'ResNet101'], \
+    #         "--backbone unsupported" 
 
     # conf init
     conf = core.init_config(args.conf)
@@ -124,172 +124,173 @@ def train():
     start_iter = 0
     start_time = time.time()
 
-    # data_dir = '/home/lihanyu/baidu/adu-lab/D4LCN/data'
-    # d4lcn_reader = D4lcnReader(conf, data_dir)
     # get reader and anchor
-    d4lcn_reader = D4lcnReader(conf, args.data_dir)
+    data_dir = '/home/lihanyu/baidu/adu-lab/D4LCN/data'
+    d4lcn_reader = D4lcnReader(conf, data_dir)
+    # get reader and anchor
+    # d4lcn_reader = D4lcnReader(conf, args.data_dir)
     epoch = (conf.max_iter / (d4lcn_reader.len/conf.batch_size)) + 1
     train_reader = d4lcn_reader.get_reader(conf.batch_size, mode='train')
     pdb.set_trace()
     # generate_anchors(conf, m3drpn_reader.data['train'], paths.output)
     # compute_bbox_stats(conf, m3drpn_reader.data['train'], paths.output)
-    # pickle_write(os.path.join(paths.output, 'conf.pkl'), conf)
+    pickle_write(os.path.join(paths.output, 'conf.pkl'), conf)
 
-    # # train
-    # place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
-    #     if args.use_data_parallel else fluid.CUDAPlace(0)
+    # train
+    place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
+        if args.use_data_parallel else fluid.CUDAPlace(0)
 
-    # with fluid.dygraph.guard(place):
-    #     if args.ce:
-    #         print("ce mode")
-    #         seed = 33
-    #         np.random.seed(seed)
-    #         fluid.default_startup_program().random_seed = seed
-    #         fluid.default_main_program().random_seed = seed
+    with fluid.dygraph.guard(place):
+        if args.ce:
+            print("ce mode")
+            seed = 33
+            np.random.seed(seed)
+            fluid.default_startup_program().random_seed = seed
+            fluid.default_main_program().random_seed = seed
 
-    #     if args.use_data_parallel:
-    #         strategy = fluid.dygraph.parallel.prepare_context()
+        if args.use_data_parallel:
+            strategy = fluid.dygraph.parallel.prepare_context()
         
-    #     # -----------------------------------------
-    #     # network and loss
-    #     # -----------------------------------------
+        # -----------------------------------------
+        # network and loss
+        # -----------------------------------------
 
-    #     # training network
-    #     train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output)
+        # training network
+        train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output)
         
-    #     # setup loss
-    #     criterion_det = RPN_3D_loss(conf)
+        # setup loss
+        criterion_det = RPN_3D_loss(conf)
         
-    #     if args.use_data_parallel:
-    #         train_model = fluid.dygraph.parallel.DataParallel(train_model, strategy)
+        if args.use_data_parallel:
+            train_model = fluid.dygraph.parallel.DataParallel(train_model, strategy)
         
-    #     if args.use_data_parallel:
-    #         train_reader = fluid.contrib.reader.distributed_batch_reader(
-    #             train_reader)
-    #     # # pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
-    #     # #state_dict = train_model.state_dict()
-    #     # #Convert
-    #     # #TODO load pretrained model
+        if args.use_data_parallel:
+            train_reader = fluid.contrib.reader.distributed_batch_reader(
+                train_reader)
+        # # pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
+        # #state_dict = train_model.state_dict()
+        # #Convert
+        # #TODO load pretrained model
         
         
-    #     # if os.path.exists(conf.pretrained):
-    #     #      print("load pretrain model from ", conf.pretrained)
-    #     #      pretrained, _ = fluid.load_dygraph(conf.pretrained)
-    #     #      train_model.base.set_dict(pretrained, use_structured_name=True)
-    #     #     #train_model.set_dict(pretrained, use_structured_name=True)
-    #     # dict = train_model.state_dict()
-    #     # fluid.save_dygraph(dict, "paddle")
+        # if os.path.exists(conf.pretrained):
+        #      print("load pretrain model from ", conf.pretrained)
+        #      pretrained, _ = fluid.load_dygraph(conf.pretrained)
+        #      train_model.base.set_dict(pretrained, use_structured_name=True)
+        #     #train_model.set_dict(pretrained, use_structured_name=True)
+        # dict = train_model.state_dict()
+        # fluid.save_dygraph(dict, "paddle")
         
-    #     total_batch_num = 0
+        total_batch_num = 0
 
-    #     for epo in range(int(epoch)):
+        for epo in range(int(epoch)):
             
-    #         total_loss = 0.0
-    #         total_acc1 = 0.0
+            total_loss = 0.0
+            total_acc1 = 0.0
             
-    #         total_sample = 0
+            total_sample = 0
             
-    #         for batch_id, data in enumerate(train_reader()):
+            for batch_id, data in enumerate(train_reader()):
 
-    #             #NOTE: used in benchmark
-    #             # if args.max_iter and total_batch_num == args.max_iter:
-    #             #     return
-    #             batch_start = time.time()
+                #NOTE: used in benchmark
+                # if args.max_iter and total_batch_num == args.max_iter:
+                #     return
+                batch_start = time.time()
                 
-    #             images = np.array(
-    #                 [x[0].reshape(3, 512, 1760) for x in data]).astype('float32')
-    #             imobjs = np.array([x[1] for x in data])
-    #             # import pickle
-    #             # images = pickle.load(open("images.pkl","rb"))
-    #             # imobjs = pickle.load(open("imobjs.pkl","rb"))
-    #             # img = to_variable(images)
-    #             #  learning rate
-    #             # cur_iter = epo*100 + batch_id # TODO next_iter
-    #             # adjust_lr(conf, optimizer, cur_iter) 
+                images = np.array(
+                    [x[0].reshape(3, 512, 1760) for x in data]).astype('float32')
+                imobjs = np.array([x[1] for x in data])
+                # import pickle
+                # images = pickle.load(open("images.pkl","rb"))
+                # imobjs = pickle.load(open("imobjs.pkl","rb"))
+                # img = to_variable(images)
+                #  learning rate
+                # cur_iter = epo*100 + batch_id # TODO next_iter
+                # adjust_lr(conf, optimizer, cur_iter) 
                 
-    #             if len(np.array([x[1] for x in data])) != conf.batch_size:
-    #                 continue
+                if len(np.array([x[1] for x in data])) != conf.batch_size:
+                    continue
                 
-    #             img = to_variable(images)
-    #             # label = to_variable(y_data)
-    #             # label.stop_gradient = True
+                img = to_variable(images)
+                # label = to_variable(y_data)
+                # label.stop_gradient = True
                 
-    #             cls, prob, bbox_2d, bbox_3d, feat_size = train_model(img)
+                cls, prob, bbox_2d, bbox_3d, feat_size = train_model(img)
 
-    #             # f=open('./cls_paddle.pkl','wb')
-    #             # pickle.dump(cls.numpy(),f)
-    #             # f.close()
-    #             # f=open('./prob_paddle.pkl','wb')
-    #             # pickle.dump(prob.numpy(),f)
-    #             # f.close()
-    #             # f=open('./bbox_2d_paddle.pkl','wb')
-    #             # pickle.dump(bbox_2d.numpy(),f)
-    #             # f.close()
-    #             # f=open('./bbox_3d_paddle.pkl','wb')
-    #             # pickle.dump(bbox_3d.numpy(),f)
-    #             # f.close()
+                # f=open('./cls_paddle.pkl','wb')
+                # pickle.dump(cls.numpy(),f)
+                # f.close()
+                # f=open('./prob_paddle.pkl','wb')
+                # pickle.dump(prob.numpy(),f)
+                # f.close()
+                # f=open('./bbox_2d_paddle.pkl','wb')
+                # pickle.dump(bbox_2d.numpy(),f)
+                # f.close()
+                # f=open('./bbox_3d_paddle.pkl','wb')
+                # pickle.dump(bbox_3d.numpy(),f)
+                # f.close()
                 
-    #             # # loss
-    #             det_loss, det_stats = criterion_det(cls, prob, bbox_2d, bbox_3d, imobjs, feat_size)
+                # # loss
+                det_loss, det_stats = criterion_det(cls, prob, bbox_2d, bbox_3d, imobjs, feat_size)
         
-    #             total_loss = det_loss
-    #             stats = det_stats
+                total_loss = det_loss
+                stats = det_stats
                 
                 
-    #             # backprop
-    #             if total_loss > 0:
-    #                 if args.use_data_parallel:
-    #                     total_loss = train_model.scale_loss(total_loss)
-    #                     total_loss.backward()
-    #                     train_model.apply_collective_grads()
-    #                 else:
-    #                     total_loss.backward()
+                # backprop
+                if total_loss > 0:
+                    if args.use_data_parallel:
+                        total_loss = train_model.scale_loss(total_loss)
+                        total_loss.backward()
+                        train_model.apply_collective_grads()
+                    else:
+                        total_loss.backward()
 
-    #                 # batch skip, simulates larger batches by skipping gradient step
-    #                 if (not 'batch_skip' in conf) or ((batch_id + 1) % conf.batch_skip) == 0:
-    #                     optimizer.minimize(total_loss)
-    #                     optimizer.clear_gradients()
+                    # batch skip, simulates larger batches by skipping gradient step
+                    if (not 'batch_skip' in conf) or ((batch_id + 1) % conf.batch_skip) == 0:
+                        optimizer.minimize(total_loss)
+                        optimizer.clear_gradients()
                         
-    #             batch_end = time.time()
-    #             train_batch_cost = batch_end - batch_start
+                batch_end = time.time()
+                train_batch_cost = batch_end - batch_start
 
-    #             # keep track of stats
-    #             compute_stats(tracker, stats)
+                # keep track of stats
+                compute_stats(tracker, stats)
 
-    #             # -----------------------------------------
-    #             # display
-    #             # -----------------------------------------
-    #             iteration = epo * (m3drpn_reader.len/conf.batch_size) + batch_id
+                # -----------------------------------------
+                # display
+                # -----------------------------------------
+                iteration = epo * (m3drpn_reader.len/conf.batch_size) + batch_id
                 
-    #             if iteration % conf.display == 0 and iteration > start_iter:
-    #                 # log results
-    #                 log_stats(tracker, iteration, start_time, start_iter, conf.max_iter)
-    #                 print( "epoch %d | batch step %d | iter %d, batch cost: %.5f, loss %0.3f" % \
-    #                        (epo, batch_id, iteration, train_batch_cost, total_loss.numpy()))
+                if iteration % conf.display == 0 and iteration > start_iter:
+                    # log results
+                    log_stats(tracker, iteration, start_time, start_iter, conf.max_iter)
+                    print( "epoch %d | batch step %d | iter %d, batch cost: %.5f, loss %0.3f" % \
+                           (epo, batch_id, iteration, train_batch_cost, total_loss.numpy()))
                     
-    #                 # reset tracker
-    #                 tracker = edict()
+                    # reset tracker
+                    tracker = edict()
                     
                     
-    #             # snapshot, do_test 
+                # snapshot, do_test 
                 
-    #             if iteration % conf.snapshot_iter == 0 and iteration > start_iter:
-    #                 fluid.save_dygraph(train_model.state_dict(),
-    #                                    '{}/iter{}_params'.format(paths.weights, iteration))
-    #                 fluid.save_dygraph(optimizer.state_dict(),
-    #                                    '{}/iter{}_opt'.format(paths.weights, iteration))
+                if iteration % conf.snapshot_iter == 0 and iteration > start_iter:
+                    fluid.save_dygraph(train_model.state_dict(),
+                                       '{}/iter{}_params'.format(paths.weights, iteration))
+                    fluid.save_dygraph(optimizer.state_dict(),
+                                       '{}/iter{}_opt'.format(paths.weights, iteration))
 
-    #                 #do test
-    #                 if conf.do_test:
-    #                     train_model.phase=  "eval"
-    #                     train_model.eval()
-    #                     results_path = os.path.join(paths.results, 'results_{}'.format((epo)))
-    #                 if conf.test_protocol.lower() == 'kitti':
-    #                     results_path = os.path.join(results_path, 'data')
-    #                     mkdir_if_missing(results_path, delete_if_exist=True)
-    #                     test_kitti_3d(conf.dataset_test, train_model, conf, results_path, paths.data)
-    #                 train_model.phase = "train"
-    #                 train_model.train()
+                    #do test
+                    if conf.do_test:
+                        train_model.phase=  "eval"
+                        train_model.eval()
+                        results_path = os.path.join(paths.results, 'results_{}'.format((epo)))
+                    if conf.test_protocol.lower() == 'kitti':
+                        results_path = os.path.join(results_path, 'data')
+                        mkdir_if_missing(results_path, delete_if_exist=True)
+                        test_kitti_3d(conf.dataset_test, train_model, conf, results_path, paths.data)
+                    train_model.phase = "train"
+                    train_model.train()
             
 
 

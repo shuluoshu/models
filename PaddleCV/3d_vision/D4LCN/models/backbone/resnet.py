@@ -22,8 +22,53 @@ from paddle.fluid.layer_helper import LayerHelper
 from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear
 from paddle.fluid.dygraph.container import Sequential
 
-from hapi.model import Model
-from hapi.download import get_weights_path_from_url
+# from hapi.model import Model
+from lib.download import get_weights_path_from_url
+
+class ResNetDilate(fluid.dygraph.Layer):
+  def __init__(self, num_layer=50):
+    super(ResNetDilate, self).__init__()
+    if num_layer == 50:
+        model_resnet = resnet50(pretrained=True)
+    if num_layer == 101:
+        model_resnet = resnet101(pretrained=True)
+    self.conv1 = model_resnet.conv
+    self.maxpool = model_resnet.pool
+    self.layer1 = model_resnet.layer_1
+    self.layer2 = model_resnet.layer_2
+    self.layer3 = model_resnet.layer_3
+    self.layer4 = model_resnet.layer_4
+
+    # for n, m in self.layer3.named_modules():
+    #     if 'conv2' in n:
+    #         m.dilation, m.padding, m.stride = (2, 2), (2, 2), (1, 1)
+    #     elif 'downsample.0' in n:
+    #         m.stride = (1, 1)
+    
+    for n, m in self.layer4.named_modules():
+        if 'conv2' in n:  # conv1 for resnet34
+            m.dilation, m.padding, m.stride = (2, 2), (2, 2), (1, 1)
+        elif 'downsample.0' in n:
+            m.stride = (1, 1)
+    # self.avgpool = nn.AdaptiveMaxPool2d((1,1))
+    #
+    # self.fc = nn.Linear(model_resnet.fc.in_features, class_num)
+    # self.fc.apply(init_weights)
+
+  def forward(self, x):
+    x = self.conv1(x)
+    x = self.maxpool(x)
+
+    x = self.layer1(x)
+    x = self.layer2(x)
+    x = self.layer3(x)
+    x = self.layer4(x)
+
+    # x = self.avgpool(x)
+    # x = x.view(x.size(0), -1)
+    # x = self.fc(x)
+    return x
+
 
 __all__ = [
     'ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152',
@@ -170,7 +215,7 @@ class BottleneckBlock(fluid.dygraph.Layer):
         return fluid.layers.relu(x)
 
 
-class ResNet(Model):
+class ResNet(fluid.dygraph.Layer):
     """ResNet model from
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
 

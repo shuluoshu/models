@@ -13,7 +13,7 @@ import gc
 from lib.util import *
 from lib.core import *
 from data.augmentations import *
-# from lib.nms.gpu_nms import gpu_nms
+from lib.nms.gpu_nms import gpu_nms
 
 from copy import deepcopy
 import numpy as np
@@ -1281,36 +1281,36 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
     tracker = tracker[sorted_inds]
   
 
-    # if synced:
+    if synced:
 
-    #     # nms
-    #     keep_inds = gpu_nms(aboxes[:, 0:5].astype(np.float32), rpn_conf.nms_thres, device_id=gpu)
+        # nms
+        keep_inds = gpu_nms(aboxes[:, 0:5].astype(np.float32), rpn_conf.nms_thres, device_id=gpu)
 
-    #     # convert to bool
-    #     keep = np.zeros([aboxes.shape[0], 1], dtype=bool)
-    #     keep[keep_inds, :] = True
+        # convert to bool
+        keep = np.zeros([aboxes.shape[0], 1], dtype=bool)
+        keep[keep_inds, :] = True
 
-    #     # stack the keep array,
-    #     # sync to the original order
-    #     aboxes = np.hstack((aboxes, keep))
-    #     aboxes[original_inds, :]
+        # stack the keep array,
+        # sync to the original order
+        aboxes = np.hstack((aboxes, keep))
+        aboxes[original_inds, :]
 
-    # else:
+    else:
 
-        # # pre-nms
-        # cls_pred = cls_pred[0:min(rpn_conf.nms_topN_pre, cls_pred.shape[0])]
-        # tracker = tracker[0:min(rpn_conf.nms_topN_pre, tracker.shape[0])]
-        # aboxes = aboxes[0:min(rpn_conf.nms_topN_pre, aboxes.shape[0]), :]
-        # coords_3d = coords_3d[0:min(rpn_conf.nms_topN_pre, coords_3d.shape[0])]
+        # pre-nms
+        cls_pred = cls_pred[0:min(rpn_conf.nms_topN_pre, cls_pred.shape[0])]
+        tracker = tracker[0:min(rpn_conf.nms_topN_pre, tracker.shape[0])]
+        aboxes = aboxes[0:min(rpn_conf.nms_topN_pre, aboxes.shape[0]), :]
+        coords_3d = coords_3d[0:min(rpn_conf.nms_topN_pre, coords_3d.shape[0])]
 
-        # # nms
-        # keep_inds = gpu_nms(aboxes[:, 0:5].astype(np.float32), rpn_conf.nms_thres, device_id=gpu)
+        # nms
+        keep_inds = gpu_nms(aboxes[:, 0:5].astype(np.float32), rpn_conf.nms_thres, device_id=gpu)
 
-        # # stack cls prediction
-        # aboxes = np.hstack((aboxes, cls_pred[:, np.newaxis], coords_3d, tracker[:, np.newaxis]))
+        # stack cls prediction
+        aboxes = np.hstack((aboxes, cls_pred[:, np.newaxis], coords_3d, tracker[:, np.newaxis]))
 
-        # # suppress boxes
-        # aboxes = aboxes[keep_inds, :]
+        # suppress boxes
+        aboxes = aboxes[keep_inds, :]
 
     # clip boxes
     if rpn_conf.clip_boxes:
