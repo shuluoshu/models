@@ -30,6 +30,7 @@ import struct
 from paddle.fluid.dygraph.base import to_variable
 from paddle.fluid.proto.framework_pb2 import VarType
 from paddle.fluid.layers.learning_rate_scheduler import _decay_step_counter
+import paddle.fluid as fluid
 
 # stop python from writing so much bytecode
 sys.dont_write_bytecode = True
@@ -51,7 +52,7 @@ def init_config(conf_name):
     conf = importlib.import_module('config.' + conf_name).Config()
 
     return conf
-import paddle.fluid as fluid
+
 
 class MyPolynomialDecay(fluid.dygraph.PolynomialDecay):
     
@@ -68,65 +69,75 @@ class MyPolynomialDecay(fluid.dygraph.PolynomialDecay):
         
         return decay_lr
 
-"""               
-def adjust_lr(conf):
+               
+def adjust_lr(conf): # TODO onecycle
     
-    
-    if 'batch_skip' in conf and ((iter + 1) % conf.batch_skip) > 0: return
-    
-    
-    def poly_lr(iter):
-        if conf.solver_type.lower() == 'sgd':
-            lr = conf.lr
-            lr_steps = conf.lr_steps
-            max_iter = conf.max_iter
-            lr_policy = conf.lr_policy
-            lr_target = conf.lr_target
 
-            if lr_steps:
-                steps = np.array(lr_steps) * max_iter
-                total_steps = steps.shape[0]
-                step_count = np.sum((steps - iter) <= 0)
+    #if 'batch_skip' in conf and ((iter + 1) % conf.batch_skip) > 0: return
 
-            else:
-                total_steps = max_iter
-                step_count = iter
+    if conf.solver_type.lower() == 'sgd':
 
-            # perform the exact number of steps needed to get to lr_target
-            if lr_policy.lower() == 'step':
-                scale = (lr_target / lr) ** (1 / total_steps)
-                lr *= scale ** step_count
+        lr = conf.lr
+        lr_steps = conf.lr_steps
+        max_iter = conf.max_iter
+        lr_policy = conf.lr_policy
+        lr_target = conf.lr_target
 
-            # compute the scale needed to go from lr --> lr_target
-            # using a polynomial function instead.
-            elif lr_policy.lower() == 'poly':
+        # if lr_steps:
+        #     steps = np.array(lr_steps) * max_iter
+        #     total_steps = steps.shape[0]
+        #     step_count = np.sum((steps - iter) <= 0)
+
+        # else:
+        #     total_steps = max_iter
+        #     step_count = iter
+
+        # perform the exact number of steps needed to get to lr_target
+        if lr_policy.lower() == 'step':
+            scale = (lr_target / lr) ** (1 / total_steps)
+            lr *= scale ** step_count
+
+            # update the actual learning rate
+            # for gind, g in enumerate(optimizer.param_groups):
+            #     g['lr'] = lr
+        # compute the scale needed to go from lr --> lr_target
+        # using a polynomial function instead.
+        elif lr_policy.lower() == 'poly':
+
+            lr = MyPolynomialDecay(lr, max_iter, lr_target, power=0.9)
+            # power = 0.9
+            # scale = total_steps / (1 - (lr_target / lr) ** (1 / power))
+            # lr *= (1 - step_count / scale) ** power
+
+            # # update the actual learning rate
+            # for gind, g in enumerate(optimizer.param_groups):
+            #     g['lr'] = lr
+
+        # elif lr_policy.lower() == 'cosinerestart':
+        #     scheduler.step()
+
+        # elif lr_policy.lower() == 'onecycle':
+        #     scheduler.step()
+
+        # elif lr_policy.lower() == 'cosinepoly':
+        #     scheduler.step()
+
+        #     power = 0.9
+        #     scale = total_steps / (1 - (lr_target / lr) ** (1 / power))
+        #     lr_weight = (1 - step_count / scale) ** power
+        #     for gind, g in enumerate(optimizer.param_groups):
+        #         g['lr'] = g['lr'] * lr_weight
                 
-                power = 0.9
-                scale = total_steps / (1 - (lr_target / lr) ** (1 / power))
-                print(scale)
-                lr *= (1 - step_count / scale) ** power
-                
-            else:
-                raise ValueError('{} lr_policy not understood'.format(lr_policy))
-        
-            return lr
-            
-        
-    global_iter = _decay_step_counter()
-    decay_lr = fluid.layers.create_global_var(
-                shape=[1],
-                value=float(conf.lr),
-                dtype='float32',
-                persistable=True,
-                name="learning_rate")
-    fluid.layers.tensor.assign(input=poly_lr(global_iter), output=decay_lr)
-    
-    return decay_lr
-    
-"""    
+
+        else:
+            raise ValueError('{} lr_policy not understood'.format(lr_policy))
 
 
-def init_training_model(conf, backbone, cache_folder):
+    return lr            
+         
+
+
+def init_training_model(conf, backbone, cache_folder, conf_name):
     """
     This function is meant to load the training model and optimizer, which expects
     ./model/<conf.model>.py to be the pytorch model file.
@@ -140,6 +151,7 @@ def init_training_model(conf, backbone, cache_folder):
     # (re-) copy the model file
     if os.path.exists(dst_path): os.remove(dst_path)
     shutil.copyfile(src_path, dst_path)
+    shutil.copyfile(os.path.join('.', 'scripts', 'config', conf_name + '.py'), os.path.join(cache_folder, conf_name + '.py')) # TODO
 
     # load and build
     network = absolute_import(dst_path)
@@ -147,17 +159,19 @@ def init_training_model(conf, backbone, cache_folder):
 
     # multi-gpu
     #network = torch.nn.DataParallel(network)
+    
+    
 
     # load SGD
     if conf.solver_type.lower() == 'sgd':
 
-        start_lr = conf.lr
-        end_lr = conf.lr_target
-        total_step = conf.max_iter
+        #start_lr = conf.lr
+        #end_lr = conf.lr_target
+        #total_step = conf.max_iter
         mo = conf.momentum
         wd = conf.weight_decay
-        
-        lr = MyPolynomialDecay(start_lr, total_step, end_lr, power=0.9)
+        lr = adjust_lr(conf)
+        #lr = MyPolynomialDecay(start_lr, total_step, end_lr, power=0.9)
         optimizer = fluid.optimizer.MomentumOptimizer(learning_rate=lr, momentum=mo, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
        
     # load adam
@@ -237,35 +251,35 @@ def intersect(box_a, box_b, mode='combinations', data_type=None):
         raise ValueError('unknown mode {}'.format(mode))
 
 
-# def iou3d(corners_3d_b1, corners_3d_b2, vol):
+def iou3d(corners_3d_b1, corners_3d_b2, vol):
 
-#     corners_3d_b1 = copy.copy(corners_3d_b1)
-#     corners_3d_b2 = copy.copy(corners_3d_b2)
+    corners_3d_b1 = copy.copy(corners_3d_b1)
+    corners_3d_b2 = copy.copy(corners_3d_b2)
 
-#     corners_3d_b1 = corners_3d_b1.T
-#     corners_3d_b2 = corners_3d_b2.T
+    corners_3d_b1 = corners_3d_b1.T
+    corners_3d_b2 = corners_3d_b2.T
 
-#     y_min_b1 = np.min(corners_3d_b1[:, 1])
-#     y_max_b1 = np.max(corners_3d_b1[:, 1])
-#     y_min_b2 = np.min(corners_3d_b2[:, 1])
-#     y_max_b2 = np.max(corners_3d_b2[:, 1])
-#     y_intersect = np.max([0, np.min([y_max_b1, y_max_b2]) - np.max([y_min_b1, y_min_b2])])
+    y_min_b1 = np.min(corners_3d_b1[:, 1])
+    y_max_b1 = np.max(corners_3d_b1[:, 1])
+    y_min_b2 = np.min(corners_3d_b2[:, 1])
+    y_max_b2 = np.max(corners_3d_b2[:, 1])
+    y_intersect = np.max([0, np.min([y_max_b1, y_max_b2]) - np.max([y_min_b1, y_min_b2])])
 
-#     # set Z as Y
-#     corners_3d_b1[:, 1] = corners_3d_b1[:, 2]
-#     corners_3d_b2[:, 1] = corners_3d_b2[:, 2]
+    # set Z as Y
+    corners_3d_b1[:, 1] = corners_3d_b1[:, 2]
+    corners_3d_b2[:, 1] = corners_3d_b2[:, 2]
 
-#     polygon_order = [7, 2, 3, 6, 7]
-#     box_b1_bev = Polygon([list(corners_3d_b1[i][0:2]) for i in polygon_order])
-#     box_b2_bev = Polygon([list(corners_3d_b2[i][0:2]) for i in polygon_order])
+    polygon_order = [7, 2, 3, 6, 7]
+    box_b1_bev = Polygon([list(corners_3d_b1[i][0:2]) for i in polygon_order])
+    box_b2_bev = Polygon([list(corners_3d_b2[i][0:2]) for i in polygon_order])
 
-#     intersect_bev = box_b2_bev.intersection(box_b1_bev).area
-#     intersect_3d = y_intersect * intersect_bev
+    intersect_bev = box_b2_bev.intersection(box_b1_bev).area
+    intersect_3d = y_intersect * intersect_bev
 
-#     iou_bev = intersect_bev / (box_b2_bev.area + box_b1_bev.area - intersect_bev)
-#     iou_3d = intersect_3d / (vol - intersect_3d)
+    iou_bev = intersect_bev / (box_b2_bev.area + box_b1_bev.area - intersect_bev)
+    iou_3d = intersect_3d / (vol - intersect_3d)
 
-#     return iou_bev, iou_3d
+    return iou_bev, iou_3d
 
 
 def iou(box_a, box_b, mode='combinations', data_type=None):
@@ -620,7 +634,7 @@ def compute_stats(tracker, stats):
 #     return iterator, images, imobjs
 
 
-def init_training_paths(conf_name, use_tmp_folder=None):
+def init_training_paths(conf_name, result_dir, use_tmp_folder=None): #TODO
     """
     Simple function to store and create the relevant paths for the project,
     based on the base = current_working_dir (cwd). For this reason, we expect
@@ -639,13 +653,13 @@ def init_training_paths(conf_name, use_tmp_folder=None):
     # make paths
     paths = edict()
     paths.base = os.getcwd()
-    paths.data = os.path.join(paths.base, 'dataset')
+    paths.data = os.path.join(paths.base, 'data')
     paths.output = os.path.join(os.getcwd(), 'output', conf_name)
-    paths.weights = os.path.join(paths.output, 'weights')
-    paths.logs = os.path.join(paths.output, 'log')
+    paths.weights = os.path.join(paths.output, result_dir, 'weights')
+    paths.logs = os.path.join(paths.output, result_dir, 'log')
 
     if use_tmp_folder: paths.results = os.path.join(paths.base, '.tmp_results', conf_name, 'results')
-    else: paths.results = os.path.join(paths.output, 'results')
+    else: paths.results = os.path.join(paths.output, result_dir, 'results')
 
     # make directories
     mkdir_if_missing(paths.output)
@@ -654,6 +668,7 @@ def init_training_paths(conf_name, use_tmp_folder=None):
     mkdir_if_missing(paths.results)
 
     return paths
+
 
 
 # def init_torch(rng_seed, cuda_seed):

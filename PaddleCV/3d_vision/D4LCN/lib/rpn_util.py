@@ -429,108 +429,129 @@ def cluster_anchors(feat_stride, anchors, test_scale, imdb, lbls, ilbls, anchor_
 
 
 def compute_targets(gts_val, gts_ign, box_lbls, rois, fg_thresh, ign_thresh, bg_thresh_lo, bg_thresh_hi, best_thresh,
-                     gts_3d=None, anchors=[], tracker=[]):
-     """
-     Computes the bbox targets of a set of rois and a set
-     of ground truth boxes, provided various ignore
-     settings in configuration
-     """
+                    gts_3d=None, gts_vertices=None, gts_corners_3d=None, anchors=[], tracker=[]): # TODO
+    """
+    Computes the bbox targets of a set of rois and a set
+    of ground truth boxes, provided various ignore
+    settings in configuration
+    """
 
-     ols = None
-     has_3d = gts_3d is not None
+    ols = None
+    has_3d = gts_3d is not None
+    use_corner = gts_vertices is not None
 
-     # init transforms which respectively hold [dx, dy, dw, dh, label]
-     # for labels bg=-1, ign=0, fg>=1
-     transforms = np.zeros([len(rois), 5], dtype=np.float32)
-     raw_gt = np.zeros([len(rois), 5], dtype=np.float32)
+    # init transforms which respectively hold [dx, dy, dw, dh, label]
+    # for labels bg=-1, ign=0, fg>=1
+    transforms = np.zeros([len(rois), 5], dtype=np.float32)
+    raw_gt = np.zeros([len(rois), 5], dtype=np.float32)
 
-     # if 3d, then init other terms after
-     if has_3d:
-         transforms = np.pad(transforms, [(0, 0), (0, gts_3d.shape[1])], 'constant')
-         raw_gt = np.pad(raw_gt, [(0, 0), (0, gts_3d.shape[1])], 'constant')
+    # if 3d, then init other terms after
+    if use_corner:
+        transforms = np.pad(transforms, [(0, 0), (0, gts_3d.shape[1] + gts_vertices.shape[1] + gts_corners_3d.shape[1])], 'constant')
+        raw_gt = np.pad(raw_gt, [(0, 0), (0, gts_3d.shape[1] + gts_vertices.shape[1] + gts_corners_3d.shape[1])], 'constant')
+    elif has_3d:
+        transforms = np.pad(transforms, [(0, 0), (0, gts_3d.shape[1])], 'constant')
+        raw_gt = np.pad(raw_gt, [(0, 0), (0, gts_3d.shape[1])], 'constant')
 
-     if gts_val.shape[0] > 0 or gts_ign.shape[0] > 0:
+    if gts_val.shape[0] > 0 or gts_ign.shape[0] > 0:
 
-         if gts_ign.shape[0] > 0:
+        if gts_ign.shape[0] > 0:
 
-             # compute overlaps ign
-             ols_ign = iou_ign(rois, gts_ign)
-             ols_ign_max = np.amax(ols_ign, axis=1)
+            # compute overlaps ign
+            ols_ign = iou_ign(rois, gts_ign)
+            ols_ign_max = np.amax(ols_ign, axis=1)
 
-         else:
-             ols_ign_max = np.zeros([rois.shape[0]], dtype=np.float32)
+        else:
+            ols_ign_max = np.zeros([rois.shape[0]], dtype=np.float32)
 
-         if gts_val.shape[0] > 0:
+        if gts_val.shape[0] > 0:
 
-             # compute overlaps valid
-             ols = iou(rois, gts_val)
-             ols_max = np.amax(ols, axis=1)
-             targets = np.argmax(ols, axis=1)
+            # compute overlaps valid
+            ols = iou(rois, gts_val)
+            ols_max = np.amax(ols, axis=1)
+            targets = np.argmax(ols, axis=1)
 
-             # find best matches for each ground truth
-             gt_best_rois = np.argmax(ols, axis=0)
-             gt_best_ols = np.amax(ols, axis=0)
+            # find best matches for each ground truth
+            gt_best_rois = np.argmax(ols, axis=0)
+            gt_best_ols = np.amax(ols, axis=0)
 
-             gt_best_rois = gt_best_rois[gt_best_ols >= best_thresh]
-             gt_best_ols = gt_best_ols[gt_best_ols >= best_thresh]
+            gt_best_rois = gt_best_rois[gt_best_ols >= best_thresh]
+            gt_best_ols = gt_best_ols[gt_best_ols >= best_thresh]
 
-             fg_inds = np.flatnonzero(ols_max >= fg_thresh)
-             fg_inds = np.concatenate((fg_inds, gt_best_rois))
-             fg_inds = np.unique(fg_inds)
+            fg_inds = np.flatnonzero(ols_max >= fg_thresh)
+            fg_inds = np.concatenate((fg_inds, gt_best_rois))
+            fg_inds = np.unique(fg_inds)
 
-             target_rois = gts_val[targets[fg_inds], :]
-             src_rois = rois[fg_inds, :]
+            target_rois = gts_val[targets[fg_inds], :]
+            src_rois = rois[fg_inds, :]
 
-             if len(fg_inds) > 0:
+            if len(fg_inds) > 0:
 
-                 # compute 2d transform
-                 transforms[fg_inds, 0:4] = bbox_transform(src_rois, target_rois)
+                # compute 2d transform
+                transforms[fg_inds, 0:4] = bbox_transform(src_rois, target_rois)
 
-                 raw_gt[fg_inds, 0:4] = target_rois
+                raw_gt[fg_inds, 0:4] = target_rois
 
-                 if has_3d:
+                if use_corner:
+                    tracker = tracker.astype(np.int64)
+                    src_3d = anchors[tracker[fg_inds], 4:]
+                    target_3d = gts_3d[targets[fg_inds]]
+                    target_vertices = gts_vertices[targets[fg_inds]]
+                    target_corners_3d = gts_corners_3d[targets[fg_inds]]
+                    dim_3d = target_3d.shape[1]
 
-                     tracker = tracker.astype(np.int64)
-                     src_3d = anchors[tracker[fg_inds], 4:]
-                     target_3d = gts_3d[targets[fg_inds]]
+                    transforms[fg_inds, 5 + dim_3d:5 + dim_3d+2 *8] = bbox_transform_vertices(src_rois, target_vertices)
+                    transforms[fg_inds, 5:5 + dim_3d] = bbox_transform_3d(src_rois, src_3d, target_3d)
+                    transforms[fg_inds, 5 + dim_3d+2*8:5 + dim_3d+5*8] = bbox_transform_corners(src_3d, target_corners_3d)
 
-                     raw_gt[fg_inds, 5:] = target_3d
+                    raw_gt[fg_inds, 5 + dim_3d:5 + dim_3d+2*8] = target_vertices
+                    raw_gt[fg_inds, 5 + dim_3d+2*8:5 + dim_3d+5*8] = target_corners_3d
+                    raw_gt[fg_inds, 5:5 + dim_3d] = target_3d
 
-                     # compute 3d transform
-                     transforms[fg_inds, 5:] = bbox_transform_3d(src_rois, src_3d, target_3d)
+                elif has_3d:
 
+                    tracker = tracker.astype(np.int64)
+                    src_3d = anchors[tracker[fg_inds], 4:]
+                    target_3d = gts_3d[targets[fg_inds]]
 
-                 # store labels
-                 transforms[fg_inds, 4] = [box_lbls[x] for x in targets[fg_inds]]
-                 assert (all(transforms[fg_inds, 4] >= 1))
+                    raw_gt[fg_inds, 5:] = target_3d
 
-         else:
-
-             ols_max = np.zeros(rois.shape[0], dtype=int)
-             fg_inds = np.empty(shape=[0])
-             gt_best_rois = np.empty(shape=[0])
-
-         # determine ignores
-         ign_inds = np.flatnonzero(ols_ign_max >= ign_thresh)
-
-         # determine background
-         bg_inds = np.flatnonzero((ols_max >= bg_thresh_lo) & (ols_max < bg_thresh_hi))
-
-         # subtract fg and igns from background
-         bg_inds = np.setdiff1d(bg_inds, ign_inds)
-         bg_inds = np.setdiff1d(bg_inds, fg_inds)
-         bg_inds = np.setdiff1d(bg_inds, gt_best_rois)
-
-         # mark background
-         transforms[bg_inds, 4] = -1
-
-     else:
-
-         # all background
-         transforms[:, 4] = -1
+                    # compute 3d transform
+                    transforms[fg_inds, 5:] = bbox_transform_3d(src_rois, src_3d, target_3d)
 
 
-     return transforms, ols, raw_gt
+                # store labels
+                transforms[fg_inds, 4] = [box_lbls[x] for x in targets[fg_inds]]
+                assert (all(transforms[fg_inds, 4] >= 1))
+
+        else:
+
+            ols_max = np.zeros(rois.shape[0], dtype=int)
+            fg_inds = np.empty(shape=[0])
+            gt_best_rois = np.empty(shape=[0])
+
+        # determine ignores
+        ign_inds = np.flatnonzero(ols_ign_max >= ign_thresh)
+
+        # determine background
+        bg_inds = np.flatnonzero((ols_max >= bg_thresh_lo) & (ols_max < bg_thresh_hi))
+
+        # subtract fg and igns from background
+        bg_inds = np.setdiff1d(bg_inds, ign_inds)
+        bg_inds = np.setdiff1d(bg_inds, fg_inds)
+        bg_inds = np.setdiff1d(bg_inds, gt_best_rois)
+
+        # mark background
+        transforms[bg_inds, 4] = -1
+
+    else:
+
+        # all background
+        transforms[:, 4] = -1
+
+
+    return transforms, ols, raw_gt
+
 
 
 def hill_climb(p2, p2_inv, box_2d, x2d, y2d, z2d, w3d, h3d, l3d, ry3d, step_z_init=0, step_r_init=0, z_lim=0, r_lim=0, min_ol_dif=0.0):
@@ -614,8 +635,7 @@ def clsName2Ind(lbls, cls):
     else:
         raise ValueError('unknown class')
 
-
-def compute_bbox_stats(conf, imdb, cache_folder=''):
+def compute_bbox_stats(conf, imdb, cache_folder=''): # TODO
     """
     Computes the mean and standard deviation for each regression
     parameter (usually pertaining to [dx, dy, sw, sh] but sometimes
@@ -633,7 +653,10 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
 
     else:
 
-        if conf.has_3d:
+        if conf.use_corner:
+            squared_sums = np.zeros([1, 53], dtype=np.float128)
+            sums = np.zeros([1, 53], dtype=np.float128)
+        elif conf.has_3d:
             squared_sums = np.zeros([1, 11], dtype=np.float128)
             sums = np.zeros([1, 11], dtype=np.float128)
         else:
@@ -646,7 +669,6 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
         logging.info('Computing bbox regression mean..')
 
         for imind, imobj in enumerate(imdb):
-
             if len(imobj.gts) > 0:
 
                 scale_factor = imobj.scale * conf.test_scale / imobj.imH
@@ -669,7 +691,31 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
                 box_lbls = box_lbls[(rmvs == False) & (igns == False)]
                 box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
 
-                if conf.has_3d:
+                if conf.use_corner:
+                    gts_vertices = np.array([gt.vertices for gt in imobj.gts])
+                    gts_vertices = gts_vertices[(rmvs == False) & (igns == False), :]
+                    # print(imind, gts_vertices)
+                    gts_corners_3d = np.array([gt.corners_3d for gt in imobj.gts])
+                    gts_corners_3d = gts_corners_3d[(rmvs == False) & (igns == False), :]
+                    for gtind, gt in enumerate(gts_vertices):
+                        gts_vertices[gtind] *= scale_factor
+
+                    # accumulate 3d boxes
+                    gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
+                    gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
+
+                    # rescale centers (in 2d)
+                    for gtind, gt in enumerate(gts_3d):
+                        gts_3d[gtind, 0:2] *= scale_factor
+
+                    # compute transforms for all 3d
+                    transforms, _, _= compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                      conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
+                                                      gts_vertices=gts_vertices, gts_corners_3d=gts_corners_3d,
+                                                      anchors=conf.anchors, tracker=rois[:, 4])
+
+
+                elif conf.has_3d:
 
                     # accumulate 3d boxes
                     gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
@@ -692,8 +738,14 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
                 gt_inds = np.flatnonzero(transforms[:, 4] > 0)
 
                 if len(gt_inds) > 0:
-
-                    if conf.has_3d:
+                    if conf.use_corner:
+                        sums[:, 0:4] += np.sum(transforms[gt_inds, 0:4], axis=0)
+                        sums[:, 4:11] += np.sum(transforms[gt_inds, 5:12], axis=0)
+                        sums[:, 11:27] += np.sum(transforms[gt_inds, 16:32], axis=0)  # vertices
+                        sums[:, 27:35] += np.sum(transforms[gt_inds, 32:40], axis=0)  # depth
+                        sums[:, 35:51] += np.sum(transforms[gt_inds, 40:56], axis=0)  # 3d corner
+                        sums[:, 51:53] += np.sum(transforms[gt_inds, 12:14], axis=0)  # 3d center
+                    elif conf.has_3d:
                         sums[:, 0:4] += np.sum(transforms[gt_inds, 0:4], axis=0)
                         sums[:, 4:] += np.sum(transforms[gt_inds, 5:12], axis=0)
                     else:
@@ -728,7 +780,29 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
                 box_lbls = box_lbls[(rmvs == False) & (igns == False)]
                 box_lbls = np.array([clsName2Ind(conf.lbls, cls) for cls in box_lbls])
 
-                if conf.has_3d:
+                if conf.use_corner:
+                    gts_vertices = np.array([gt.vertices for gt in imobj.gts])
+                    gts_vertices = gts_vertices[(rmvs == False) & (igns == False), :]
+                    gts_corners_3d = np.array([gt.corners_3d for gt in imobj.gts])
+                    gts_corners_3d = gts_corners_3d[(rmvs == False) & (igns == False), :]
+                    for gtind, gt in enumerate(gts_vertices):
+                        gts_vertices[gtind] *= scale_factor
+
+                    # accumulate 3d boxes
+                    gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
+                    gts_3d = gts_3d[(rmvs == False) & (igns == False), :]
+
+                    # rescale centers (in 2d)
+                    for gtind, gt in enumerate(gts_3d):
+                        gts_3d[gtind, 0:2] *= scale_factor
+
+                    # compute transforms for all 3d
+                    transforms, _, _= compute_targets(gts_val, gts_ign, box_lbls, rois, conf.fg_thresh, conf.ign_thresh,
+                                                      conf.bg_thresh_lo, conf.bg_thresh_hi, conf.best_thresh, gts_3d=gts_3d,
+                                                      gts_vertices=gts_vertices, gts_corners_3d=gts_corners_3d,
+                                                      anchors=conf.anchors, tracker=rois[:, 4])
+
+                elif conf.has_3d:
 
                     # accumulate 3d boxes
                     gts_3d = np.array([gt.bbox_3d for gt in imobj.gts])
@@ -751,8 +825,14 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
                 gt_inds = np.flatnonzero(transforms[:, 4] > 0)
 
                 if len(gt_inds) > 0:
-
-                    if conf.has_3d:
+                    if conf.use_corner:
+                        squared_sums[:, 0:4] += np.sum(np.power(transforms[gt_inds, 0:4], 2), axis=0)
+                        squared_sums[:, 4:11] += np.sum(np.power(transforms[gt_inds, 5:12], 2), axis=0)
+                        squared_sums[:, 11:27] += np.sum(np.power(transforms[gt_inds, 16:32], 2), axis=0)  # vertices
+                        squared_sums[:, 27:35] += np.sum(np.power(transforms[gt_inds, 32:40], 2), axis=0)  # depth
+                        squared_sums[:, 35:51] += np.sum(np.power(transforms[gt_inds, 40:56], 2), axis=0)  # 3d corner
+                        squared_sums[:, 51:53] += np.sum(np.power(transforms[gt_inds, 12:14], 2), axis=0)  # 3d center
+                    elif conf.has_3d:
                         squared_sums[:, 0:4] += np.sum(np.power(transforms[gt_inds, 0:4] - means[:, 0:4], 2), axis=0)
                         squared_sums[:, 4:] += np.sum(np.power(transforms[gt_inds, 5:12] - means[:, 4:], 2), axis=0)
 
@@ -774,6 +854,8 @@ def compute_bbox_stats(conf, imdb, cache_folder=''):
     conf.bbox_means = means
     conf.bbox_stds = stds
 
+
+    
 
 def flatten_tensor(input): 
     """
@@ -975,6 +1057,21 @@ def bbox_transform_3d(ex_rois_2d, ex_rois_3d, gt_rois):
 
     return targets
 
+def bbox_transform_corners(ex_rois_3d, gt_corners): #TODO add
+    """
+    Compute the bbox target transforms in 3D.
+
+    Translations are done as simple difference, whereas others involving
+    scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+    log(1.2) > 0 which is a good property).
+    """
+
+
+    delta_z = gt_corners[:, 2*8:3*8].T - ex_rois_3d[:, 0]
+    targets = np.hstack((delta_z.T, gt_corners[:, :2*8]))
+
+
+    return targets
 
 def bbox_transform(ex_rois, gt_rois):
     """
@@ -1001,6 +1098,27 @@ def bbox_transform(ex_rois, gt_rois):
     targets_dh = np.log(gt_heights / ex_heights)
 
     targets = np.vstack((targets_dx, targets_dy, targets_dw, targets_dh)).transpose()
+
+    return targets
+
+def bbox_transform_vertices(ex_rois, gt_vertices): # TODO add
+    """
+    Compute the bbox target transforms in 2D.
+
+    Translations are done as simple difference, whereas others involving
+    scaling are done in log space (hence, log(1) = 0, log(0.8) < 0 and
+    log(1.2) > 0 which is a good property).
+    """
+
+    ex_widths = ex_rois[:, 2] - ex_rois[:, 0] + 1.0
+    ex_heights = ex_rois[:, 3] - ex_rois[:, 1] + 1.0
+    ex_ctr_x = ex_rois[:, 0] + 0.5 * (ex_widths - 1)
+    ex_ctr_y = ex_rois[:, 1] + 0.5 * (ex_heights - 1)
+
+    targets_x = (gt_vertices[:, :8].T - ex_ctr_x) / ex_widths
+    targets_y = (gt_vertices[:, 8:].T - ex_ctr_y) / ex_heights
+
+    targets = np.vstack((targets_x, targets_y)).T
 
     return targets
 
@@ -1165,27 +1283,32 @@ def calc_output_size(res, stride):
     return np.ceil(np.array(res)/stride).astype(int)
 
 
-def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
+def im_detect_3d(im, depth, net, rpn_conf, preprocess, p2, gpu=0, synced=False): #TODO
     """
     Object detection in 3D
     """
-    
 
     imH_orig = im.shape[0]
     imW_orig = im.shape[1]
-    
-    im = preprocess(im)
+
+    im, depth = preprocess(im, depth)
     im = im[np.newaxis, :, :, :]
+    depth = depth[np.newaxis, :, :, :]
     imH = im.shape[2]
     imW = im.shape[3]
     # move to GPU
     im = to_variable(im)
-  
-
+    depth = to_variable(depth)
+    
     scale_factor = imH / imH_orig
-    
-    cls, prob, bbox_2d, bbox_3d, feat_size, rois = net(im)
-    
+
+    # if rpn_conf.corner_in_3d:
+    #     cls, prob, bbox_2d, bbox_3d, feat_size, rois, bbox_vertices, corners_3d = net(im, depth)
+    # elif rpn_conf.use_corner:
+    #     cls, prob, bbox_2d, bbox_3d, feat_size, rois, bbox_vertices = net(im, depth)
+    # else:
+    cls, prob, bbox_2d, bbox_3d, feat_size, rois = net(im, depth)
+
     # compute feature resolution
     num_anchors = rpn_conf.anchors.shape[0]
 
@@ -1212,9 +1335,8 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
     bbox_ry3d = bbox_ry3d * rpn_conf.bbox_stds[:, 10][0] + rpn_conf.bbox_means[:, 10][0]
 
     # find 3d source
-
-    #tracker = rois[:, 4].cpu().detach().numpy().astype(np.int64)
-    #src_3d = torch.from_numpy(rpn_conf.anchors[tracker, 4:]).cuda().type(torch.cuda.FloatTensor)
+    # tracker = rois[:, 4].cpu().detach().numpy().astype(np.int64)
+    # src_3d = torch.from_numpy(rpn_conf.anchors[tracker, 4:]).cuda().type(torch.cuda.FloatTensor)
     tracker = rois[:, 4].astype(np.int64)
     src_3d = rpn_conf.anchors[tracker, 4:]
 
@@ -1226,7 +1348,6 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
     heights = rois[:, 3] - rois[:, 1] + 1.0
     ctr_x = rois[:, 0] + 0.5 * widths
     ctr_y = rois[:, 1] + 0.5 * heights
-    
 
     bbox_x3d_np = bbox_x3d.numpy()
     bbox_y3d_np = bbox_y3d.numpy()#(1, N)
@@ -1250,26 +1371,28 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
     bbox_l3d_np = np.exp(bbox_l3d_np[0, :]) * src_3d[:, 3]
     bbox_ry3d_np = src_3d[:, 4] + bbox_ry3d_np[0, :]
     
+    
+
     # bundle
     coords_3d = np.stack((bbox_x3d_np, bbox_y3d_np, bbox_z3d_np[:bbox_x3d_np.shape[0]], bbox_w3d_np[:bbox_x3d_np.shape[0]], bbox_h3d_np[:bbox_x3d_np.shape[0]], \
         bbox_l3d_np[:bbox_x3d_np.shape[0]], bbox_ry3d_np[:bbox_x3d_np.shape[0]]), axis=1)#[N, 7]
+    
 
     # compile deltas pred
-  
     deltas_2d = np.concatenate((bbox_x_np[0, :, np.newaxis], bbox_y_np[0, :, np.newaxis], bbox_w_np[0, :, np.newaxis], bbox_h_np[0, :, np.newaxis]), axis=1)#N,4
     coords_2d = bbox_transform_inv(rois, deltas_2d, means=rpn_conf.bbox_means[0, :], stds=rpn_conf.bbox_stds[0, :])#[N,4]
 
     # detach onto cpu
-    #coords_2d = coords_2d.cpu().detach().numpy()
-    #coords_3d = coords_3d.cpu().detach().numpy()
-    prob_np = prob[0, :, :].numpy()#.cpu().detach().numpy()
+    # coords_2d = coords_2d.cpu().detach().numpy()
+    # coords_3d = coords_3d.cpu().detach().numpy()
+    prob = prob[0, :, :].numpy() #cpu().detach().numpy()
 
     # scale coords
     coords_2d[:, 0:4] /= scale_factor
     coords_3d[:, 0:2] /= scale_factor
 
-    cls_pred = np.argmax(prob_np[:, 1:], axis=1) + 1
-    scores = np.amax(prob_np[:, 1:], axis=1)
+    cls_pred = np.argmax(prob[:, 1:], axis=1) + 1
+    scores = np.amax(prob[:, 1:], axis=1)
 
     aboxes = np.hstack((coords_2d, scores[:, np.newaxis]))
 
@@ -1279,7 +1402,6 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
     coords_3d = coords_3d[sorted_inds, :]
     cls_pred = cls_pred[sorted_inds]
     tracker = tracker[sorted_inds]
-  
 
     if synced:
 
@@ -1318,7 +1440,10 @@ def im_detect_3d(im, net, rpn_conf, preprocess, p2, gpu=0, synced=False):
         aboxes[:, 1] = np.clip(aboxes[:, 1], 0, imH_orig - 1)
         aboxes[:, 2] = np.clip(aboxes[:, 2], 0, imW_orig - 1)
         aboxes[:, 3] = np.clip(aboxes[:, 3], 0, imH_orig - 1)
+
     return aboxes
+
+
 
 
 def get_2D_from_3D(p2, cx3d, cy3d, cz3d, w3d, h3d, l3d, rotY):
@@ -1337,18 +1462,19 @@ def get_2D_from_3D(p2, cx3d, cy3d, cz3d, w3d, h3d, l3d, rotY):
 
     return np.array([x, y, x2, y2])
 
-
-def test_kitti_3d(dataset_test, net, rpn_conf, results_path, test_path, use_log=True):
+def test_kitti_3d(dataset_test, test_split, net, rpn_conf, results_path, test_path, use_log=True): #TODO
     """
     Test the KITTI framework for object detection in 3D
     """
 
     # import read_kitti_cal
-    from data.m3drpn_reader import read_kitti_cal
+    from lib.imdb_util import read_kitti_cal
 
-    imlist = list_files(os.path.join(test_path, dataset_test, 'validation', 'image_2', ''), '*.png')
+    # test_split = 'validation'
+    imlist = list_files(os.path.join(test_path, dataset_test, test_split, 'image_2', ''), '*.png')
 
-    preprocess = Preprocess([rpn_conf.test_scale], rpn_conf.image_means, rpn_conf.image_stds)
+    preprocess = Preprocess([rpn_conf.test_scale], rpn_conf.image_means, rpn_conf.image_stds, rpn_conf.depth_mean,
+                            rpn_conf.depth_std, rpn_conf.use_rcnn_pretrain)
 
     # fix paths slightly
     _, test_iter, _ = file_parts(results_path.replace('/data', ''))
@@ -1360,30 +1486,42 @@ def test_kitti_3d(dataset_test, net, rpn_conf, results_path, test_path, use_log=
     for imind, impath in enumerate(imlist):
 
         im = cv2.imread(impath)
+        if rpn_conf.depth_channel == 3:
+            depth = cv2.imread(impath.replace('image_2', 'depth_2'))
+        else:
+            depth = cv2.imread(impath.replace('image_2', 'depth_2'), cv2.IMREAD_UNCHANGED)
+            depth = depth[:, :, np.newaxis]
+            if rpn_conf.use_seg:
+                seg = cv2.imread(impath.replace('image_2', 'seg'), cv2.IMREAD_UNCHANGED)
+                seg = seg[:, :, np.newaxis]
+                depth = np.tile(depth, (1, 1, 2))
+                depth = np.concatenate((depth, seg), axis=2)
+            else:
+                depth = np.tile(depth, (1, 1, 3))
 
         base_path, name, ext = file_parts(impath)
 
         # read in calib
-        p2 = read_kitti_cal(os.path.join(test_path, dataset_test, 'validation', 'calib', name + '.txt'))
+        p2 = read_kitti_cal(os.path.join(test_path, dataset_test, test_split, 'calib', name + '.txt'))  # 3d to 2d
         p2_inv = np.linalg.inv(p2)
 
         # forward test batch
-        aboxes = im_detect_3d(im, net, rpn_conf, preprocess, p2)
+        aboxes = im_detect_3d(im, depth, net, rpn_conf, preprocess, p2)
 
         base_path, name, ext = file_parts(impath)
 
         file = open(os.path.join(results_path, name + '.txt'), 'w')
         text_to_write = ''
-        
+
         for boxind in range(0, min(rpn_conf.nms_topN_post, aboxes.shape[0])):
 
             box = aboxes[boxind, :]
             score = box[4]
             cls = rpn_conf.lbls[int(box[5] - 1)]
 
-            #if score >= 0.75:
-            if score >= 0.5:#TODO yexiaoqing
+            if score >= 0.75:
 
+                # 2D box
                 x1 = box[0]
                 y1 = box[1]
                 x2 = box[2]
@@ -1400,8 +1538,9 @@ def test_kitti_3d(dataset_test, net, rpn_conf, results_path, test_path, use_log=
                 l3d = box[11]
                 ry3d = box[12]
 
-                # convert alpha into ry3d
+                # Inverse matrix and scale, to 3d camera coordinate
                 coord3d = np.linalg.inv(p2).dot(np.array([x3d * z3d, y3d * z3d, 1 * z3d, 1]))
+                # convert alpha into ry3d
                 ry3d = convertAlpha2Rot(ry3d, coord3d[2], coord3d[0])
 
                 step_r = 0.3*math.pi
@@ -1419,21 +1558,21 @@ def test_kitti_3d(dataset_test, net, rpn_conf, results_path, test_path, use_log=
                 z3d = coord3d[2]
 
                 y3d += h3d/2
-                
+
                 text_to_write += ('{} -1 -1 {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} {:.6f} '
                            + '{:.6f} {:.6f}\n').format(cls, alpha, x1, y1, x2, y2, h3d, w3d, l3d, x3d, y3d, z3d, ry3d, score)
-                           
+
         file.write(text_to_write)
         file.close()
 
         # display stats
-        if (imind + 1) % 1000 == 0:
+        if (imind + 1) % 100 == 0:
             time_str, dt = compute_eta(test_start, imind + 1, len(imlist))
 
             print_str = 'testing {}/{}, dt: {:0.3f}, eta: {}'.format(imind + 1, len(imlist), dt, time_str)
 
             if use_log: logging.info(print_str)
-            else: print(print_str)
+            else: print(print_str, flush=True)
 
 
     # evaluate
@@ -1450,33 +1589,56 @@ def test_kitti_3d(dataset_test, net, rpn_conf, results_path, test_path, use_log=
         respath_3d = os.path.join(results_path.replace('/data', ''), 'stats_{}_detection_3d.txt'.format(lbl))
 
         if os.path.exists(respath_2d):
-            easy, mod, hard = parse_kitti_result(respath_2d)
+            easy, mod, hard = parse_kitti_result(respath_2d, mode='old')
 
-            print_str = 'test_iter {} 2d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+            print_str = 'OLD_test_iter {} 2d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
                                                                                                     easy, mod, hard)
             if use_log: logging.info(print_str)
             else: print(print_str)
 
+            easy, mod, hard = parse_kitti_result(respath_2d)
+
+            print_str = 'NEW_test_iter {} 2d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+                                                                                                   easy, mod, hard)
+            if use_log: logging.info(print_str)
+            else: print(print_str)
+
         if os.path.exists(respath_gr):
+            easy, mod, hard = parse_kitti_result(respath_gr, mode='old')
+
+            print_str = 'OLD_test_iter {} gr {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+                                                                                                    easy, mod, hard)
+
+            if use_log: logging.info(print_str)
+            else: print(print_str)
+
             easy, mod, hard = parse_kitti_result(respath_gr)
 
-            print_str = 'test_iter {} gr {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
-                                                                                                    easy, mod, hard)
+            print_str = 'NEW_test_iter {} gr {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+                                                                                                   easy, mod, hard)
 
             if use_log: logging.info(print_str)
             else: print(print_str)
 
         if os.path.exists(respath_3d):
-            easy, mod, hard = parse_kitti_result(respath_3d)
+            easy, mod, hard = parse_kitti_result(respath_3d, mode='old')
 
-            print_str = 'test_iter {} 3d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+            print_str = 'OLD_test_iter {} 3d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
                                                                                                     easy, mod, hard)
 
             if use_log: logging.info(print_str)
             else: print(print_str)
 
+            easy, mod, hard = parse_kitti_result(respath_3d)
 
-def parse_kitti_result(respath):
+            print_str = 'NEW_test_iter {} 3d {} --> easy: {:0.4f}, mod: {:0.4f}, hard: {:0.4f}'.format(test_iter, lbl,
+                                                                                                   easy, mod, hard)
+
+            if use_log: logging.info(print_str)
+            else: print(print_str)
+
+
+def parse_kitti_result(respath, mode='new'): # TODO
 
     text_file = open(respath, 'r')
 
@@ -1494,15 +1656,17 @@ def parse_kitti_result(respath):
 
     text_file.close()
 
-    easy = np.mean(acc[0, 0:41:4])
-    mod = np.mean(acc[1, 0:41:4])
-    hard = np.mean(acc[2, 0:41:4])
-
-    #easy = np.mean(acc[0, 1:41:1])
-    #mod = np.mean(acc[1, 1:41:1])
-    #hard = np.mean(acc[2, 1:41:1])
+    if mode == 'old':
+        easy = np.mean(acc[0, 0:41:4])
+        mod = np.mean(acc[1, 0:41:4])
+        hard = np.mean(acc[2, 0:41:4])
+    else:
+        easy = np.mean(acc[0, 1:41:1])
+        mod = np.mean(acc[1, 1:41:1])
+        hard = np.mean(acc[2, 1:41:1])
 
     return easy, mod, hard
+
 
 
 # def parse_kitti_vo(respath):
