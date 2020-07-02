@@ -72,8 +72,6 @@ class D4lcnReader(object):
         logger.info("Loading KITTI dataset from {} ...".format(self.data_dir))
         # read all_files.txt
 
-        import glob
-        import time 
         for dbind, db in enumerate(self.conf.datasets_train):
             # pdb.set_trace()
             logging.info('Loading imgs_label {}'.format(db['name']))
@@ -328,30 +326,6 @@ def read_kitti_cal(calfile):
 
     return p2
 
-def determine_ignores(gts, lbls, ilbls, min_gt_vis=0.99, min_gt_h=0, max_gt_h=10e10, scale_factor=1):
-    """
-    Given various configuration settings, determine which ground truths
-    are ignored and which are relevant.
-    """
-
-    igns = np.zeros([len(gts)], dtype=bool)
-    rmvs = np.zeros([len(gts)], dtype=bool)
-
-    for gtind, gt in enumerate(gts):
-
-        ign = gt.ign
-        ign |= gt.visibility < min_gt_vis
-        ign |= gt.bbox_full[3] * scale_factor < min_gt_h
-        ign |= gt.bbox_full[3] * scale_factor > max_gt_h
-        ign |= gt.cls in ilbls
-
-        rmv = not gt.cls in (lbls + ilbls)
-
-        igns[gtind] = ign
-        rmvs[gtind] = rmv
-
-    return igns, rmvs
-
 def balance_samples(conf, imdb):
     """
     Balances the samples in an image dataset according to the given configuration.
@@ -405,7 +379,6 @@ def balance_samples(conf, imdb):
     sample_weights /= np.sum(sample_weights)
     return sample_weights
     
-
 
 def read_kitti_poses(posefile):
     """
@@ -467,57 +440,6 @@ def read_kitti_poses(posefile):
     text_file.close()
 
     return ps
-
-def project_3d(p2, x3d, y3d, z3d, w3d, h3d, l3d, ry3d, return_3d=False):
-	"""
-	Projects a 3D box into 2D vertices
-
-	Args:
-		p2 (nparray): projection matrix of size 4x3
-		x3d: x-coordinate of center of object
-		y3d: y-coordinate of center of object
-		z3d: z-cordinate of center of object
-		w3d: width of object
-		h3d: height of object
-		l3d: length of object
-		ry3d: rotation w.r.t y-axis
-	"""
-
-	# compute rotational matrix around yaw axis
-	R = np.array([[+math.cos(ry3d), 0, +math.sin(ry3d)],
-				  [0, 1, 0],
-				  [-math.sin(ry3d), 0, +math.cos(ry3d)]])
-
-	# 3D bounding box corners
-	x_corners = np.array([0, l3d, l3d, l3d, l3d, 0, 0, 0])
-	y_corners = np.array([0, 0, h3d, h3d, 0, 0, h3d, h3d])
-	z_corners = np.array([0, 0, 0, w3d, w3d, w3d, w3d, 0])
-
-	x_corners += -l3d / 2
-	y_corners += -h3d / 2
-	z_corners += -w3d / 2
-
-	# bounding box in object co-ordinate
-	corners_3d = np.array([x_corners, y_corners, z_corners])
-
-	# rotate
-	corners_3d = R.dot(corners_3d)
-
-	# translate
-	corners_3d += np.array([x3d, y3d, z3d]).reshape((3, 1))
-
-	corners_3D_1 = np.vstack((corners_3d, np.ones((corners_3d.shape[-1]))))
-	corners_2D = p2.dot(corners_3D_1)
-	corners_2D = corners_2D / corners_2D[2]
-
-	bb3d_lines_verts_idx = [0, 1, 2, 3, 4, 5, 6, 7, 0, 5, 4, 1, 2, 7, 6, 3]
-
-	verts3d = (corners_2D[:, bb3d_lines_verts_idx][:2]).astype(float).T
-
-	if return_3d:
-		return verts3d, corners_3d
-	else:
-		return verts3d
 
 
 def read_kitti_label(file, p2, use_3d_for_2d=False):
@@ -664,7 +586,6 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
     text_file.close()
 
     return gts
-
 
 
 def _term_reader(signum, frame):
