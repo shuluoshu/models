@@ -52,8 +52,14 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         self.min_gt_h = conf.min_gt_h
         self.max_gt_h = conf.max_gt_h
 
+        self.use_corner = conf.use_corner 
+        self.corner_in_3d = conf.corner_in_3d
+        self.use_hill_loss = conf.use_hill_loss
 
-    def forward(self, cls, prob, bbox_2d, bbox_3d, imobjs, feat_size):
+    #def forward(self, cls, prob, bbox_2d, bbox_3d, imobjs, feat_size):
+    def forward(self, cls, prob, bbox_2d, bbox_3d, imobjs, feat_size, bbox_vertices=None, corners_3d=None):  
+        """forward"""
+
 
         stats = []
         loss = np.array([0]).astype('float32')
@@ -67,15 +73,16 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         batch_size = cls.shape[0]
 
         prob_detach = prob.detach().numpy()
+        # cls : [B x (W x H) x (Class_num * Anchor_num)] 144
 
-        bbox_x = bbox_2d[:, :, 0]
+        bbox_x = bbox_2d[:, :, 0]## [B x (W x H) x Anchor_num] 36
         bbox_y = bbox_2d[:, :, 1]
         bbox_w = bbox_2d[:, :, 2]
         bbox_h = bbox_2d[:, :, 3]
 
-        bbox_x3d = bbox_3d[:, :, 0]
+        bbox_x3d = bbox_3d[:, :, 0]# 3d_proj center  
         bbox_y3d = bbox_3d[:, :, 1]
-        bbox_z3d = bbox_3d[:, :, 2]
+        bbox_z3d = bbox_3d[:, :, 2]#depth
         bbox_w3d = bbox_3d[:, :, 3]
         bbox_h3d = bbox_3d[:, :, 4]
         bbox_l3d = bbox_3d[:, :, 5]
@@ -88,7 +95,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         #bbox_y3d_proj = to_variable(bbox_y3d_proj)
         #bbox_z3d_proj = to_variable(bbox_z3d_proj)
 
-        labels = np.zeros(cls.shape[0:2])
+        labels = np.zeros(cls.shape[0:2])# B x (W x H)
         labels_weight = np.zeros(cls.shape[0:2])
 
         labels_scores = np.zeros(cls.shape[0:2])
@@ -127,6 +134,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         rois = rois.astype('float32')
 
         #bbox_3d dtype is Variable, so bbox_3d_dn is
+        ## de-mean std
         bbox_x3d_dn = bbox_x3d * self.bbox_stds[:, 4][0] + self.bbox_means[:, 4][0]
         bbox_y3d_dn = bbox_y3d * self.bbox_stds[:, 5][0] + self.bbox_means[:, 5][0]
         bbox_z3d_dn = bbox_z3d * self.bbox_stds[:, 6][0] + self.bbox_means[:, 6][0]
@@ -158,6 +166,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         bbox_h3d_unsqueeze = fluid.layers.unsqueeze(input=src_anchors[:,6], axes=0)
         bbox_l3d_unsqueeze = fluid.layers.unsqueeze(input=src_anchors[:,7], axes=0)
         bbox_ry3d_unsqueeze = fluid.layers.unsqueeze(input=src_anchors[:,8], axes=0)
+        # de-normalization
         bbox_x3d_dn = bbox_x3d_dn * widths_unsqueeze + ctr_x_unsqueeze
         bbox_y3d_dn = bbox_y3d_dn * heights_unsqueeze + ctr_y_unsqueeze
         bbox_z3d_dn = bbox_z3d_unsqueeze + bbox_z3d_dn
@@ -166,6 +175,14 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         bbox_l3d_dn = fluid.layers.exp(bbox_l3d_dn) * bbox_l3d_unsqueeze
         bbox_ry3d_dn = bbox_ry3d_unsqueeze + bbox_ry3d_dn
 
+        #hill loss 
+        # TODO
+        # if self.use_hill_loss:
+        #     hill_coords_2d = np.zeros(cls.shape[0:2] + (4,))  # (4, 126720, 4)
+        #     hill_p2 = np.zeros((cls.shape[0], cls.shape[1], 4, 4))
+        #     hill_3d = np.zeros((cls.shape[0], cls.shape[1], 7))#should be torch to_variable TODO
+
+
         ious_2d_var_list = []
         for bind in range(0, batch_size):
 
@@ -173,12 +190,14 @@ class RPN_3D_loss(fluid.dygraph.Layer):
             gts = imobj.gts
 
             p2_inv = to_variable(imobj.p2_inv).astype('float32')
+            p2 = to_variable(imobj.p2).astype('float32') 
 
             # filter gts
             igns, rmvs = determine_ignores(gts, self.lbls, self.ilbls, self.min_gt_vis, self.min_gt_h)
 
             # accumulate boxes
             gts_all = bbXYWH2Coords(np.array([gt.bbox_full for gt in gts]))
+            # [cx, cy, cz3d_2d, w3d, h3d, l3d, alpha, cx3d, cy3d, cz3d, rotY]
             gts_3d = np.array([gt.bbox_3d for gt in gts])
 
             if not ((rmvs == False) & (igns == False)).any():
@@ -198,19 +217,66 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
                 #rois = rois.cpu()
 
-                # bbox regression
-                transforms, ols, raw_gt = compute_targets(gts_val, gts_ign, box_lbls, rois, self.fg_thresh,
+                # bbox regression TODO
+                if self.use_corner: 
+                    gts_vertices = np.array([gt.vertices for gt in imobj.gts])
+                    gts_vertices = gts_vertices[(rmvs == False) & (igns == False), :]
+                    gts_corners_3d = np.array([gt.corners_3d for gt in imobj.gts])
+                    gts_corners_3d = gts_corners_3d[(rmvs == False) & (igns == False), :]
+
+                    transforms, ols, raw_gt = compute_targets(gts_val, gts_ign, box_lbls, rois.numpy(), self.fg_thresh,
+                                                              self.ign_thresh, self.bg_thresh_lo, self.bg_thresh_hi,
+                                                              self.best_thresh, anchors=self.anchors, gts_3d=gts_3d,
+                                                              gts_vertices=gts_vertices, gts_corners_3d=gts_corners_3d,
+                                                              tracker=rois[:, 4].numpy())
+                else:
+                    transforms, ols, raw_gt = compute_targets(gts_val, gts_ign, box_lbls, rois, self.fg_thresh,
                                                   self.ign_thresh, self.bg_thresh_lo, self.bg_thresh_hi,
                                                   self.best_thresh, anchors=self.anchors,  gts_3d=gts_3d,
                                                   tracker=rois[:, 4])
+
+                # # TODO
+                # if self.use_hill_loss:
+                #     hill_deltas_2d = transforms[:, 0:4]
+                #     hill_coords_2d[bind, :, :] = bbox_transform_inv(rois, torch.from_numpy(hill_deltas_2d), means=self.bbox_means[0, :], stds=self.bbox_stds[0, :]).cpu().numpy() / imobj['scale_factor']
+
+                #     hill_p2[bind, :, :, :] = p2
+
+                #     hill_x3d = bbox_x3d_dn[bind].unsqueeze(0) / imobj['scale_factor']
+                #     hill_y3d = bbox_y3d_dn[bind].unsqueeze(0) / imobj['scale_factor']
+                #     hill_z3d = bbox_z3d_dn[bind].unsqueeze(0)
+                #     hill_w3d = bbox_w3d_dn[bind]
+                #     hill_h3d = bbox_h3d_dn[bind]
+                #     hill_l3d = bbox_l3d_dn[bind]
+                #     hill_ry3d = bbox_ry3d_dn[bind]
+                #     hill_coord3d = p2_inv.mm(torch.cat((hill_x3d * hill_z3d, hill_y3d * hill_z3d, hill_z3d, torch.ones_like(hill_x3d)), dim=0))  # # (4, 126720) # 36 * 110 * 32
+                #     hill_cx3d = hill_coord3d[0]
+                #     hill_cy3d = hill_coord3d[1]
+                #     hill_cz3d = hill_coord3d[2]
+                #     hill_ry3d = convertAlpha2Rot_torch(hill_ry3d, hill_cz3d, hill_cx3d)
+
+                #     hill_3d_all = torch.cat((hill_cx3d.unsqueeze(1), hill_cy3d.unsqueeze(1), hill_cz3d.unsqueeze(1), hill_w3d.unsqueeze(1), hill_h3d.unsqueeze(1), hill_l3d.unsqueeze(1), hill_ry3d.unsqueeze(1)), dim=1)
+                #     hill_3d[bind, :, :] = hill_3d_all
 
                 # normalize 2d
                 transforms[:, 0:4] -= self.bbox_means[:, 0:4]
                 transforms[:, 0:4] /= self.bbox_stds[:, 0:4]
 
                 # normalize 3d
-                transforms[:, 5:12] -= self.bbox_means[:, 4:]
-                transforms[:, 5:12] /= self.bbox_stds[:, 4:]
+                transforms[:, 5:12] -= self.bbox_means[:, 4:11]
+                transforms[:, 5:12] /= self.bbox_stds[:, 4:11]
+
+                # TODO
+                if self.use_corner:
+                    transforms[:, 16:32] -= self.bbox_means[:, 11:27]
+                    transforms[:, 16:32] /= self.bbox_stds[:, 11:27]
+                    transforms[:, 32:40] -= self.bbox_means[:, 27:35]
+                    transforms[:, 32:40] /= self.bbox_stds[:, 27:35]
+                if self.corner_in_3d:
+                    transforms[:, 40:56] -= self.bbox_means[:, 35:51]
+                    transforms[:, 40:56] /= self.bbox_stds[:, 35:51]
+                    transforms[:, 12:14] -= self.bbox_means[:, 51:53]
+                    transforms[:, 12:14] /= self.bbox_stds[:, 51:53]
 
                 labels_fg = transforms[:, 4] > 0
                 labels_bg = transforms[:, 4] < 0
@@ -241,10 +307,20 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 bbox_y3d_proj_tar[bind, :] = raw_gt[:, 13]
                 bbox_z3d_proj_tar[bind, :] = raw_gt[:, 14]
 
+                # TODO
+                if self.use_corner:
+                    bbox_vertices_depth_tar = np.zeros(cls.shape[0:2] + (24,))
+                    bbox_vertices_depth_tar[bind, :, :] = transforms[:, 16:40]
+                if self.corner_in_3d:
+                    bbox_3d_corners_tar = np.zeros(cls.shape[0:2] + (18,))
+                    bbox_3d_corners_tar[bind, :, :16] = transforms[:, 40:56]
+                    bbox_3d_corners_tar[bind, :, 16:] = transforms[:, 12:14]
+
                 transforms = to_variable(transforms)
                 # ----------------------------------------
                 # box sampling
                 # ----------------------------------------
+
 
                 if self.box_samples == np.inf:
                     fg_num = len(fg_inds)
@@ -389,6 +465,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 if self.hard_negatives:
 
                     if bg_num > 0 and bg_num != bg_inds.shape[0]:
+                        # Use probability prediction and sort
                         scores = prob_detach[bind, bg_inds, labels[bind, bg_inds].astype(int)]
                         bg_score_ascend = (scores).argsort()
                         bg_inds = bg_inds[bg_score_ascend]
@@ -420,6 +497,7 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
         cls_pred = np.argmax(cls.detach().numpy(), axis=2)
 
+        # class prediction acc
         if self.cls_2d_lambda and len(fg_inds_all) > 0:
             acc_fg = np.mean(cls_pred[fg_inds_unravel] == labels[fg_inds_unravel])
             stats.append({'name': 'fg', 'val': acc_fg, 'format': '{:0.2f}', 'group': 'acc'})
@@ -482,7 +560,6 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 weights_sum += np.sum(fg_weights)
                 labels_weight[fg_inds_unravel] *= fg_weights
 
-
         # ----------------------------------------
         # classification loss
         # ----------------------------------------
@@ -508,6 +585,9 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         active_index_var = to_variable(active_index)
         active_index_var.stop_gradient = True
         cls_active = fluid.layers.gather(cls_reshape, index=active_index_var)
+        
+            
+        
 
         if self.cls_2d_lambda:
 
@@ -534,8 +614,6 @@ class RPN_3D_loss(fluid.dygraph.Layer):
         # ----------------------------------------
         # bbox regression loss
         # ----------------------------------------
-
-
         if np.sum(bbox_weights) > 0:
 
             #bbox_weights = fluid.layers.reshape(bbox_weights, shape=[1,-1])
@@ -572,13 +650,13 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 bbox_w_tar = bbox_w_tar.view().astype('float32')
                 bbox_w_tar.shape = 1, bbox_total_nums
                 bbox_w_tar_active = bbox_w_tar[:, active]
-                bbox_w_tar_active = to_variable(bbox_x_tat_active)
+                bbox_w_tar_active = to_variable(bbox_w_tar_active)
                 bbox_w_tar_active.stop_gradient = True
 
                 bbox_h_tar = bbox_h_tar.view().astype('float32')
                 bbox_h_tar.shape = 1, bbox_total_nums
                 bbox_h_tar_active = bbox_h_tar[:, active]
-                bbox_h_tar_active = to_variable(bbox_x_tat_active)
+                bbox_h_tar_active = to_variable(bbox_h_tar_active)
                 bbox_h_tar_active.stop_gradient = True
 
                 #bbox_x = fluid.layers.unsqueeze(bbox_x[:,:], axis=2) 
@@ -598,10 +676,10 @@ class RPN_3D_loss(fluid.dygraph.Layer):
                 bbox_h_active = fluid.layers.gather(bbox_h, active_index_var)
                 bbox_h_active = fluid.layers.unsqueeze(bbox_h_active, axes=0)
 
-                loss_bbox_x = fluid.layers.smooth_l1(bbox_x_active, bbox_x_tar_active, outside_wieght=bbox_weights_active)
-                loss_bbox_y = fluid.layers.smooth_l1(bbox_y_active, bbox_y_tar_active, outside_wieght=bbox_weights_active)
-                loss_bbox_w = fluid.layers.smooth_l1(bbox_w_active, bbox_w_tar_active, outside_wieght=bbox_weights_active)
-                loss_bbox_h = fluid.layers.smooth_l1(bbox_h_active, bbox_h_tar_active, outside_wieght=bbox_weights_active)
+                loss_bbox_x = fluid.layers.smooth_l1(bbox_x_active, bbox_x_tar_active, outside_weight=bbox_weights_active)
+                loss_bbox_y = fluid.layers.smooth_l1(bbox_y_active, bbox_y_tar_active, outside_weight=bbox_weights_active)
+                loss_bbox_w = fluid.layers.smooth_l1(bbox_w_active, bbox_w_tar_active, outside_weight=bbox_weights_active)
+                loss_bbox_h = fluid.layers.smooth_l1(bbox_h_active, bbox_h_tar_active, outside_weight=bbox_weights_active)
 
                 bbox_2d_loss = (loss_bbox_x + loss_bbox_y + loss_bbox_w + loss_bbox_h) / active_len
                 #bbox_2d_loss = fluid.layers.mean(bbox_2d_loss)
@@ -609,6 +687,102 @@ class RPN_3D_loss(fluid.dygraph.Layer):
 
                 loss += bbox_2d_loss
                 stats.append({'name': 'bbox_2d', 'val': bbox_2d_loss.numpy(), 'format': '{:0.4f}', 'group': 'loss'})
+
+
+            # # TODO
+            # if self.use_hill_loss:
+            #     hill_loss = 0
+            #     # print(hill_3d.view(-1, 7).size(), active.size())
+            #     hill_coords_2d = torch.tensor(hill_coords_2d, requires_grad=False).type(torch.FloatTensor).cuda().view(-1, 4)[active]
+            #     hill_p2 = hill_p2.view(-1, 4, 4)[active]
+            #     hill_3d = hill_3d.view(-1, 7)[active]
+            #     for index in range(hill_3d.size()[0]):
+            #         p2 = hill_p2[index]
+            #         c3d = hill_3d[index]
+            #         R = torch.zeros(torch.Size((3, 3)))
+            #         R[0, 0] += torch.cos(c3d[6])
+            #         R[0, 2] += torch.sin(c3d[6])
+            #         R[2, 0] -= torch.sin(c3d[6])
+            #         R[2, 2] += torch.cos(c3d[6])
+            #         R[1, 1] += 1
+            #         # print(R)
+            #         corners = torch.zeros(torch.Size((3, 8)))
+            #         corners[0, 1:5] += c3d[5]/2
+            #         corners[0, [0, 5, 6, 7]] -= c3d[5]/2
+            #         corners[1, [2, 3, 6, 7]] += c3d[4]/2
+            #         corners[1, [0, 1, 4, 5]] -= c3d[4]/2
+            #         corners[2, 3:7] += c3d[3]/2
+            #         corners[2, [0, 1, 2, 7]] -= c3d[3]/2
+            #         corners = R.mm(corners)
+            #         corners[0, :] += c3d[0]
+            #         corners[1, :] += c3d[1]
+            #         corners[2, :] += c3d[2]
+            #         # print(corners)
+            #         corners = torch.cat((corners, torch.ones(torch.Size((1, 8)))), dim=0)
+            #         corners_2d = p2.mm(corners)
+            #         corners_2d = corners_2d / corners_2d[2]
+            #         x_new = torch.sum(torch.softmax(-corners_2d[0] * 100, dim=0) * corners_2d[0])
+            #         y_new = torch.sum(torch.softmax(-corners_2d[1] * 100, dim=0) * corners_2d[1])
+            #         x2_new = torch.sum(torch.softmax(corners_2d[0] * 100, dim=0) * corners_2d[0])
+            #         y2_new = torch.sum(torch.softmax(corners_2d[1] * 100, dim=0) * corners_2d[1])
+            #         # print(x_new, y_new, x2_new, y2_new)
+            #         # print(hill_coords_2d[index])
+
+            #         hill_loss += (F.smooth_l1_loss(x_new, hill_coords_2d[index][0], reduction='none') + \
+            #                      F.smooth_l1_loss(y_new, hill_coords_2d[index][1], reduction='none') +\
+            #                      F.smooth_l1_loss(x2_new, hill_coords_2d[index][2], reduction='none') +\
+            #                      F.smooth_l1_loss(y2_new, hill_coords_2d[index][3], reduction='none'))
+            #     hill_loss = hill_loss / hill_3d.size()[0] / 1000  # 2.5 pixel, 0.01 loss
+            #     loss += hill_loss * self.use_hill_loss
+            #     stats.append({'name': 'hill_loss', 'val': hill_loss, 'format': '{:0.4f}', 'group': 'loss'})
+
+            # TODO
+            if self.use_corner:
+                bbox_vertices_depth_tar = bbox_vertices_depth_tar.view().astype('float32')
+                bbox_vertices_depth_tar.shape = 1, bbox_total_nums, 24
+                bbox_vertices_depth_tar_active = bbox_vertices_depth_tar[:, active, :]
+                bbox_vertices_depth_tar_active = to_variable(bbox_vertices_depth_tar_active)
+                bbox_vertices_depth_tar_active.stop_gradient = True
+
+                bbox_vertices = fluid.layers.reshape(bbox_vertices, shape=[-1, 24]) 
+                bbox_vertices_active = fluid.layers.gather(bbox_vertices, active_index_var)
+                bbox_vertices_active = fluid.layers.unsqueeze(bbox_vertices_active, axes=0)
+
+                loss_vertices = (fluid.layers.smooth_l1(bbox_vertices_active.astype('float32'), bbox_vertices_depth_tar_active.astype('float32'), outside_weight=bbox_weights_active.astype('float32'))) / active_len
+
+                loss_vertices *= self.use_corner
+                loss += loss_vertices
+
+                # bbox_vertices_depth_tar = torch.tensor(bbox_vertices_depth_tar, requires_grad=False).type(torch.FloatTensor).cuda().view(-1, 24)
+                # bbox_vertices = bbox_vertices.view(-1, 24)
+                # loss_vertices = F.smooth_l1_loss(bbox_vertices[active], bbox_vertices_depth_tar[active], reduction='none')
+                # loss_vertices = (loss_vertices * bbox_weights[active].view(-1, 1)).mean()
+                # loss += loss_vertices * self.use_corner
+                stats.append({'name': 'loss_vertices', 'val': loss_vertices, 'format': '{:0.4f}', 'group': 'loss'})
+
+            # TODO
+            if self.corner_in_3d:
+                bbox_3d_corners_tar = bbox_3d_corners_tar.view().astype('float32')
+                bbox_3d_corners_tar.shape = 1, bbox_total_nums, 18
+                bbox_3d_corners_tar_active = bbox_3d_corners_tar[:, active, :]
+                bbox_3d_corners_tar_active = to_variable(bbox_3d_corners_tar_active)
+                bbox_3d_corners_tar_active.stop_gradient = True
+
+                corners_3d = fluid.layers.reshape(corners_3d, shape=[-1, 18]) 
+                corners_3d_active = fluid.layers.gather(corners_3d, active_index_var)
+                corners_3d_active = fluid.layers.unsqueeze(corners_3d_active, axes=0)
+
+                loss_corners_3d = (fluid.layers.smooth_l1(corners_3d_active.astype('float32'), bbox_3d_corners_tar_active.astype('float32'), outside_weight=bbox_weights_active.astype('float32'))) / active_len
+
+                loss_corners_3d *= self.corners_in_3d
+                loss += loss_corners_3d
+                
+                # bbox_3d_corners_tar = torch.tensor(bbox_3d_corners_tar, requires_grad=False).type(torch.FloatTensor).cuda().view(-1, 18)
+                # corners_3d = corners_3d.view(-1, 18)
+                # loss_corners_3d = F.smooth_l1_loss(corners_3d[active], bbox_3d_corners_tar[active], reduction='none')
+                # loss_corners_3d = (loss_corners_3d * bbox_weights[active].view(-1, 1)).mean()
+                # loss += loss_corners_3d * self.corner_in_3d
+                stats.append({'name': 'loss_corners_3d', 'val': loss_corners_3d, 'format': '{:0.4f}', 'group': 'loss'})
 
 
             if self.bbox_3d_lambda:
