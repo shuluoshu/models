@@ -1,296 +1,425 @@
-# import torch.nn as nn
-from lib.rpn_util import *
-from models.backbone import resnet
-# import torch
-import numpy as np
-# from models.deform_conv_v2 import *
+# Copyright (c) 2020 PaddlePaddle Authors. All Rights Reserved.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+from __future__ import division
+from __future__ import print_function
+
+import math
 import paddle.fluid as fluid
-from paddle.fluid.param_attr import ParamAttr
 
 from paddle.fluid.layer_helper import LayerHelper
 from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear
 from paddle.fluid.dygraph.container import Sequential
-from paddle.fluid.initializer import Normal
+
+# from hapi.model import Model
+from download import get_weights_path_from_url
 
 
-# def dynamic_local_filtering(x, depth, dilated=1):
-#     padding = nn.ReflectionPad2d(dilated)  # ConstantPad2d(1, 0)
-#     pad_depth = padding(depth)
-#     n, c, h, w = x.size()
-#     # y = torch.cat((x[:, int(c/2):, :, :], x[:, :int(c/2), :, :]), dim=1)
-#     # x = x + y
-#     y = torch.cat((x[:, -1:, :, :], x[:, :-1, :, :]), dim=1)
-#     z = torch.cat((x[:, -2:, :, :], x[:, :-2, :, :]), dim=1)
-#     x = (x + y + z) / 3
-#     pad_x = padding(x)
-#     filter = (pad_depth[:, :, dilated: dilated + h, dilated: dilated + w] * pad_x[:, :, dilated: dilated + h, dilated: dilated + w]).clone()
-#     for i in [-dilated, 0, dilated]:
-#         for j in [-dilated, 0, dilated]:
-#             if i != 0 or j != 0:
-#                 filter += (pad_depth[:, :, dilated + i: dilated + i + h, dilated + j: dilated + j + w] * pad_x[:, :, dilated + i: dilated + i + h, dilated + j: dilated + j + w]).clone()
-#     return filter / 9
+class ResNetDilate(fluid.dygraph.Layer):
+    def __init__(self, num_layer=50):
+        super(ResNetDilate, self).__init__()
+        if num_layer == 50:
+            model_resnet = resnet50(pretrained=True)
+        if num_layer == 101:
+            model_resnet = resnet101(pretrained=True)
 
-class RPN(fluid.dygraph.Layer):
-
-    def __init__(self, phase, conf):
-        super(RPN, self).__init__()
-
-        self.base = resnet.ResNetDilate(conf.base_model)
-
-        # self.adaptive_diated = conf.adaptive_diated
-        # self.dropout_position = conf.dropout_position
-        # self.use_dropout = conf.use_dropout
-        # self.drop_channel = conf.drop_channel
-        # self.use_corner = conf.use_corner
-        # self.corner_in_3d = conf.corner_in_3d
-        # self.deformable = conf.deformable
-
-        # if conf.use_rcnn_pretrain:
-        #     # print(self.base.state_dict().keys())
-        #     if conf.base_model == 101:
-        #         pretrained_model = torch.load('faster_rcnn_1_10_14657.pth')['model']
-        #         rename_dict = {'RCNN_top.0': 'layer4', 'RCNN_base.0': 'conv1', 'RCNN_base.1': 'bn1', 'RCNN_base.2': 'relu',
-        #                        'RCNN_base.3': 'maxpool', 'RCNN_base.4': 'layer1',
-        #                        'RCNN_base.5': 'layer2', 'RCNN_base.6': 'layer3'}
-        #         change_dict = {}
-        #         for item in pretrained_model.keys():
-        #             for rcnn_name in rename_dict.keys():
-        #                 if rcnn_name in item:
-        #                     change_dict[item] = item.replace(rcnn_name, rename_dict[rcnn_name])
-        #                     break
-        #         pretrained_model = {change_dict[k]: v for k, v in pretrained_model.items() if k in change_dict}
-        #         self.base.load_state_dict(pretrained_model)
-
-        #     elif conf.base_model == 50:
-        #         pretrained_model = torch.load('res50_faster_rcnn_iter_1190000.pth',
-        #                                       map_location=lambda storage, loc: storage)
-        #         pretrained_model = {k.replace('resnet.', ''): v for k, v in pretrained_model.items() if 'resnet' in k}
-        #         # print(pretrained_model.keys())
-        #         self.base.load_state_dict(pretrained_model)
-
-        self.depthnet = resnet.ResNetDilate(50)
-
-        # if self.adaptive_diated:
-        #     self.adaptive_softmax = nn.Softmax(dim=3)
-
-        #     self.adaptive_layers = nn.Sequential(
-        #         nn.AdaptiveMaxPool2d(3),
-        #         nn.Conv2d(512, 512 * 3, 3, padding=0),
-        #     )
-        #     self.adaptive_bn = nn.BatchNorm2d(512)
-        #     self.adaptive_relu = nn.ReLU(inplace=True)
-
-        #     self.adaptive_layers1 = nn.Sequential(
-        #         nn.AdaptiveMaxPool2d(3),
-        #         nn.Conv2d(1024, 1024 * 3, 3, padding=0),
-        #     )
-        #     self.adaptive_bn1 = nn.BatchNorm2d(1024)
-        #     self.adaptive_relu1 = nn.ReLU(inplace=True)
-
-        # if self.deformable:
-        #     self.deform_layer = DeformConv2d(512, 512, 3, padding=1, bias=False, modulation=True)
-
-        # settings
-        # self.phase = phase
-        # self.num_classes = len(conf['lbls']) + 1
-        # self.num_anchors = conf['anchors'].shape[0]
-
-        # self.prop_feats = nn.Sequential(
-        #     nn.Conv2d(2048, 512, 3, padding=1),
-        #     nn.ReLU(inplace=True),
-        # )
-        # if self.use_dropout:
-        #     self.dropout = nn.Dropout(p=conf.dropout_rate)
-
-        # if self.drop_channel:
-        #     self.dropout_channel = nn.Dropout2d(p=0.3)
-
-        # # outputs
-        # self.cls = nn.Conv2d(self.prop_feats[0].out_channels, self.num_classes * self.num_anchors, 1)
-
-        # # bbox 2d
-        # self.bbox_x = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_y = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_w = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_h = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-
-        # # bbox 3d
-        # self.bbox_x3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_y3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_z3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_w3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_h3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_l3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_rY3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-
-        # if self.corner_in_3d:
-        #     self.bbox_3d_corners = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 18, 1)  # 2 * 8 + 2
-        #     self.bbox_vertices = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 24, 1)  # 3 * 8
-        # elif self.use_corner:
-        #     self.bbox_vertices = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 24, 1)
-
-        # self.softmax = nn.Softmax(dim=1)
-
-        # self.feat_stride = conf.feat_stride
-        # self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
-        # self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride, convert_tensor=True)
-        # self.rois = self.rois.type(torch.cuda.FloatTensor)
-        # self.anchors = conf.anchors
-
-    def forward(self, x, depth):
-
-        batch_size = x.size(0)
-
-        x = self.base.conv1(x)
-        depth = self.depthnet.conv1(depth)
-        x = self.base.bn1(x)
-        depth = self.depthnet.bn1(depth)
-        x = self.base.relu(x)
-        depth = self.depthnet.relu(depth)
-        x = self.base.maxpool(x)
-        depth = self.depthnet.maxpool(depth)
-
-        x = self.base.layer1(x)
-        depth = self.depthnet.layer1(depth)
-        # x = dynamic_local_filtering(x, depth, dilated=1) + dynamic_local_filtering(x, depth, dilated=2) + dynamic_local_filtering(x, depth, dilated=3)
-
-        x = self.base.layer2(x)
-        depth = self.depthnet.layer2(depth)
-
-        # if self.deformable:
-        #     depth = self.deform_layer(depth)
-        #     x = x * depth
-
-        # if self.adaptive_diated:
-        #     weight = self.adaptive_layers(x).reshape(-1, 512, 1, 3)
-        #     weight = self.adaptive_softmax(weight)
-        #     x = dynamic_local_filtering(x, depth, dilated=1) * weight[:, :, :, 0:1] \
-        #         + dynamic_local_filtering(x, depth, dilated=2) * weight[:, :, :, 1:2] \
-        #         + dynamic_local_filtering(x, depth, dilated=3) * weight[:, :, :, 2:3]
-        #     x = self.adaptive_bn(x)
-        #     x = self.adaptive_relu(x)
-        # else:
-        #     x = dynamic_local_filtering(x, depth, dilated=1) + dynamic_local_filtering(x, depth, dilated=2) + dynamic_local_filtering(x, depth, dilated=3)
-
-        # if self.use_dropout and self.dropout_position == 'adaptive':
-        #     x = self.dropout(x)
-
-        # if self.drop_channel:
-        #     x = self.dropout_channel(x)
-
-        x = self.base.layer3(x)
-        depth = self.depthnet.layer3(depth)
-
-        # if self.adaptive_diated:
-        #     weight = self.adaptive_layers1(x).reshape(-1, 1024, 1, 3)
-        #     weight = self.adaptive_softmax(weight)
-        #     x = dynamic_local_filtering(x, depth, dilated=1) * weight[:, :, :, 0:1] \
-        #         + dynamic_local_filtering(x, depth, dilated=2) * weight[:, :, :, 1:2] \
-        #         + dynamic_local_filtering(x, depth, dilated=3) * weight[:, :, :, 2:3]
-        #     x = self.adaptive_bn1(x)
-        #     x = self.adaptive_relu1(x)
-        # else:
-        #     x = x * depth
-
-        x = self.base.layer4(x)
-        depth = self.depthnet.layer4(depth)
-        # x = x * depth
-
-        # if self.use_dropout and self.dropout_position == 'early':
-        #     x = self.dropout(x)
-
-        # prop_feats = self.prop_feats(x)
-
-        # if self.use_dropout and self.dropout_position == 'late':
-        #     prop_feats = self.dropout(prop_feats)
-
-        # cls = self.cls(prop_feats)
-
-        # # bbox 2d
-        # bbox_x = self.bbox_x(prop_feats)
-        # bbox_y = self.bbox_y(prop_feats)
-        # bbox_w = self.bbox_w(prop_feats)
-        # bbox_h = self.bbox_h(prop_feats)
-
-        # # bbox 3d
-        # bbox_x3d = self.bbox_x3d(prop_feats)
-        # bbox_y3d = self.bbox_y3d(prop_feats)
-        # bbox_z3d = self.bbox_z3d(prop_feats)
-        # bbox_w3d = self.bbox_w3d(prop_feats)
-        # bbox_h3d = self.bbox_h3d(prop_feats)
-        # bbox_l3d = self.bbox_l3d(prop_feats)
-        # bbox_rY3d = self.bbox_rY3d(prop_feats)
-        # # targets_dx, targets_dy, delta_z, scale_w, scale_h, scale_l, deltaRotY
-
-        # feat_h = cls.size(2)
-        # feat_w = cls.size(3)
-
-        # # reshape for cross entropy
-        # cls = cls.view(batch_size, self.num_classes, feat_h * self.num_anchors, feat_w)
-
-        # # score probabilities
-        # prob = self.softmax(cls)
-
-        # # reshape for consistency
-        # # although it's the same with x.view(batch_size, -1, 1) when c == 1, useful when c > 1
-        # bbox_x = flatten_tensor(bbox_x.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_y = flatten_tensor(bbox_y.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_w = flatten_tensor(bbox_w.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_h = flatten_tensor(bbox_h.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-
-        # bbox_x3d = flatten_tensor(bbox_x3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_y3d = flatten_tensor(bbox_y3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_z3d = flatten_tensor(bbox_z3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_w3d = flatten_tensor(bbox_w3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_h3d = flatten_tensor(bbox_h3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_l3d = flatten_tensor(bbox_l3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_rY3d = flatten_tensor(bbox_rY3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-
-        # # bundle
-        # bbox_2d = torch.cat((bbox_x, bbox_y, bbox_w, bbox_h), dim=2)
-        # bbox_3d = torch.cat((bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d), dim=2)
-
-        # if self.corner_in_3d:
-        #     corners_3d = self.bbox_3d_corners(prop_feats)
-        #     corners_3d = flatten_tensor(corners_3d.view(batch_size, 18, feat_h * self.num_anchors, feat_w))
-        #     bbox_vertices = self.bbox_vertices(prop_feats)
-        #     bbox_vertices = flatten_tensor(bbox_vertices.view(batch_size, 24, feat_h * self.num_anchors, feat_w))
-        # elif self.use_corner:
-        #     bbox_vertices = self.bbox_vertices(prop_feats)
-        #     bbox_vertices = flatten_tensor(bbox_vertices.view(batch_size, 24, feat_h * self.num_anchors, feat_w))
-
-        # feat_size = [feat_h, feat_w]
-
-        # cls = flatten_tensor(cls)
-        # prob = flatten_tensor(prob)
-        if self.training:
-            # print(cls.size(), prob.size(), bbox_2d.size(), bbox_3d.size(), feat_size)
-            if self.corner_in_3d:
-                return cls, prob, bbox_2d, bbox_3d, torch.from_numpy(
-                    np.array(feat_size)).cuda(), bbox_vertices, corners_3d
-            elif self.use_corner:
-                return cls, prob, bbox_2d, bbox_3d, torch.from_numpy(np.array(feat_size)).cuda(), bbox_vertices
+        self.conv1 = model_resnet.conv
+        self.maxpool = model_resnet.pool
+        self.layer1 = model_resnet.layer_0
+        self.layer2 = model_resnet.layer_1
+        self.layer3 = model_resnet.layer_2
+        self.layer4 = model_resnet.layer_3
+        for i in range(len(self.layer4)):
+            if num_layer == 34:
+                self.layer4[i].conv1._conv._dilation = 2
+                self.layer4[i].conv1._conv._padding = 2
+                self.layer4[i].conv1._conv._stride = 1
             else:
-                return cls, prob, bbox_2d, bbox_3d, torch.from_numpy(np.array(feat_size)).cuda()
+                self.layer4[i].conv2._conv._dilation = 2
+                self.layer4[i].conv2._conv._padding = 2
+                self.layer4[i].conv2._conv._stride = 1
 
+    def forward(self, x):
+        x = self.conv1(x)
+        x = self.maxpool(x)
+
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+
+        return x
+
+
+__all__ = [
+    'ResNet', 'resnet18', 'resnet34', 'resnet50', 'resnet101', 'resnet152',
+    'BottleneckBlock', 'BasicBlock'
+]
+
+model_urls = {
+    'resnet18': ('https://paddle-hapi.bj.bcebos.com/models/resnet18.pdparams',
+                 '0ba53eea9bc970962d0ef96f7b94057e'),
+    'resnet34': ('https://paddle-hapi.bj.bcebos.com/models/resnet34.pdparams',
+                 '46bc9f7c3dd2e55b7866285bee91eff3'),
+    'resnet50': ('https://paddle-hapi.bj.bcebos.com/models/resnet50.pdparams',
+                 '5ce890a9ad386df17cf7fe2313dca0a1'),
+    'resnet101':
+        ('https://paddle-hapi.bj.bcebos.com/models/resnet101.pdparams',
+         'fb07a451df331e4b0bb861ed97c3a9b9'),
+    'resnet152':
+        ('https://paddle-hapi.bj.bcebos.com/models/resnet152.pdparams',
+         'f9c700f26d3644bb76ad2226ed5f5713'),
+}
+
+
+class ConvBNLayer(fluid.dygraph.Layer):
+    def __init__(self,
+                 num_channels,
+                 num_filters,
+                 filter_size,
+                 stride=1,
+                 groups=1,
+                 act=None):
+        super(ConvBNLayer, self).__init__()
+
+        self._conv = Conv2D(
+            num_channels=num_channels,
+            num_filters=num_filters,
+            filter_size=filter_size,
+            stride=stride,
+            padding=(filter_size - 1) // 2,
+            groups=groups,
+            act=None,
+            bias_attr=False)
+
+        self._batch_norm = BatchNorm(num_filters, act=act)
+
+    def forward(self, inputs):
+        x = self._conv(inputs)
+        x = self._batch_norm(x)
+
+        return x
+
+
+class BasicBlock(fluid.dygraph.Layer):
+    """residual block of resnet18 and resnet34
+    """
+    expansion = 1
+
+    def __init__(self, num_channels, num_filters, stride, shortcut=True):
+        super(BasicBlock, self).__init__()
+
+        self.conv0 = ConvBNLayer(
+            num_channels=num_channels,
+            num_filters=num_filters,
+            filter_size=3,
+            act='relu')
+        self.conv1 = ConvBNLayer(
+            num_channels=num_filters,
+            num_filters=num_filters,
+            filter_size=3,
+            stride=stride,
+            act='relu')
+
+        if not shortcut:
+            self.short = ConvBNLayer(
+                num_channels=num_channels,
+                num_filters=num_filters,
+                filter_size=1,
+                stride=stride)
+
+        self.shortcut = shortcut
+
+    def forward(self, inputs):
+        y = self.conv0(inputs)
+        conv1 = self.conv1(y)
+
+        if self.shortcut:
+            short = inputs
         else:
+            short = self.short(inputs)
 
-            if self.feat_size[0] != feat_h or self.feat_size[1] != feat_w:
-                self.feat_size = [feat_h, feat_w]
-                self.rois = locate_anchors(self.anchors, self.feat_size, self.feat_stride, convert_tensor=True)
-                self.rois = self.rois.type(torch.cuda.FloatTensor)
+        y = short + conv1
 
-            return cls, prob, bbox_2d, bbox_3d, feat_size, self.rois
+        return fluid.layers.relu(y)
 
 
-def build(conf, phase='train'):
-    train = phase.lower() == 'train'
+class BottleneckBlock(fluid.dygraph.Layer):
+    """residual block of resnet50, resnet101 amd resnet152
+    """
 
-    rpn_net = RPN(phase, conf)
+    expansion = 4
 
-    if train:
-        rpn_net.train()
-    else:
-        rpn_net.eval()
+    def __init__(self, num_channels, num_filters, stride, shortcut=True):
+        super(BottleneckBlock, self).__init__()
 
-    return rpn_net
+        self.conv0 = ConvBNLayer(
+            num_channels=num_channels,
+            num_filters=num_filters,
+            filter_size=1,
+            act='relu')
+        self.conv1 = ConvBNLayer(
+            num_channels=num_filters,
+            num_filters=num_filters,
+            filter_size=3,
+            stride=stride,
+            act='relu')
+        self.conv2 = ConvBNLayer(
+            num_channels=num_filters,
+            num_filters=num_filters * self.expansion,
+            filter_size=1,
+            act=None)
+
+        if not shortcut:
+            self.short = ConvBNLayer(
+                num_channels=num_channels,
+                num_filters=num_filters * self.expansion,
+                filter_size=1,
+                stride=stride)
+
+        self.shortcut = shortcut
+
+        self._num_channels_out = num_filters * self.expansion
+
+    def forward(self, inputs):
+        x = self.conv0(inputs)
+        conv1 = self.conv1(x)
+        conv2 = self.conv2(conv1)
+
+        if self.shortcut:
+            short = inputs
+        else:
+            short = self.short(inputs)
+
+        x = fluid.layers.elementwise_add(x=short, y=conv2)
+
+        return fluid.layers.relu(x)
+
+
+class ResNet(fluid.dygraph.Layer):
+    """ResNet model from
+    `"Deep Residual Learning for Image Recognition" <https://arxiv.org/pdf/1512.03385.pdf>`_
+
+    Args:
+        Block (BasicBlock|BottleneckBlock): block module of model.
+        depth (int): layers of resnet, default: 50.
+        num_classes (int): output dim of last fc layer. If num_classes <=0, last fc layer
+                            will not be defined. Default: 1000.
+        with_pool (bool): use pool before the last fc layer or not. Default: True.
+        classifier_activation (str): activation for the last fc layer. Default: 'softmax'.
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import ResNet, BottleneckBlock, BasicBlock
+
+            resnet50 = ResNet(BottleneckBlock, 50)
+
+            resnet18 = ResNet(BasicBlock, 18)
+
+    """
+
+    def __init__(self,
+                 Block,
+                 depth=50,
+                 num_classes=1000,
+                 with_pool=True,
+                 classifier_activation='softmax'):
+        super(ResNet, self).__init__()
+        self.num_classes = num_classes
+        self.with_pool = with_pool
+
+        layer_config = {
+            18: [2, 2, 2, 2],
+            34: [3, 4, 6, 3],
+            50: [3, 4, 6, 3],
+            101: [3, 4, 23, 3],
+            152: [3, 8, 36, 3],
+        }
+        assert depth in layer_config.keys(), \
+            "supported depth are {} but input layer is {}".format(
+                layer_config.keys(), depth)
+
+        layers = layer_config[depth]
+
+        in_channels = 64
+        out_channels = [64, 128, 256, 512]
+
+        self.conv = ConvBNLayer(
+            num_channels=3,
+            num_filters=64,
+            filter_size=7,
+            stride=2,
+            act='relu')
+        self.pool = Pool2D(
+            pool_size=3, pool_stride=2, pool_padding=1, pool_type='max')
+
+        self.layers = []
+        for idx, num_blocks in enumerate(layers):
+            blocks = []
+            shortcut = False
+            for b in range(num_blocks):
+                if b == 1:
+                    in_channels = out_channels[idx] * Block.expansion
+                block = Block(
+                    num_channels=in_channels,
+                    num_filters=out_channels[idx],
+                    stride=2 if b == 0 and idx != 0 else 1,
+                    shortcut=shortcut)
+                blocks.append(block)
+                shortcut = True
+            layer = self.add_sublayer("layer_{}".format(idx),
+                                      Sequential(*blocks))
+            self.layers.append(layer)
+
+        if with_pool:
+            self.global_pool = Pool2D(
+                pool_size=7, pool_type='avg', global_pooling=True)
+
+        if num_classes > 0:
+            stdv = 1.0 / math.sqrt(out_channels[-1] * Block.expansion * 1.0)
+            self.fc_input_dim = out_channels[-1] * Block.expansion * 1 * 1
+            self.fc = Linear(
+                self.fc_input_dim,
+                num_classes,
+                act=classifier_activation,
+                param_attr=fluid.param_attr.ParamAttr(
+                    initializer=fluid.initializer.Uniform(-stdv, stdv)))
+
+    def forward(self, inputs):
+        x = self.conv(inputs)
+        x = self.pool(x)
+        for layer in self.layers:
+            x = layer(x)
+
+        if self.with_pool:
+            x = self.global_pool(x)
+
+        if self.num_classes > -1:
+            x = fluid.layers.reshape(x, shape=[-1, self.fc_input_dim])
+            x = self.fc(x)
+        return x
+
+
+def _resnet(arch, Block, depth, pretrained, **kwargs):
+    model = ResNet(Block, depth, **kwargs)
+    if pretrained:
+        assert arch in model_urls, "{} model do not have a pretrained model now, you should set pretrained=False".format(
+            arch)
+        weight_path = get_weights_path_from_url(model_urls[arch][0],
+                                                model_urls[arch][1])
+        assert weight_path.endswith(
+            '.pdparams'), "suffix of weight must be .pdparams"
+        model.load(weight_path)
+    return model
+
+
+def resnet18(pretrained=False, **kwargs):
+    """ResNet 18-layer model
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import resnet18
+
+            # build model
+            model = resnet18()
+
+            #build model and load imagenet pretrained weight
+            model = resnet18(pretrained=True)
+    """
+    return _resnet('resnet18', BasicBlock, 18, pretrained, **kwargs)
+
+
+def resnet34(pretrained=False, **kwargs):
+    """ResNet 34-layer model
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import resnet34
+
+            # build model
+            model = resnet34()
+
+            #build model and load imagenet pretrained weight
+            model = resnet34(pretrained=True)
+    """
+    return _resnet('resnet34', BasicBlock, 34, pretrained, **kwargs)
+
+
+def resnet50(pretrained=False, **kwargs):
+    """ResNet 50-layer model
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import resnet50
+
+            # build model
+            model = resnet50()
+
+            #build model and load imagenet pretrained weight
+            model = resnet50(pretrained=True)
+    """
+    return _resnet('resnet50', BottleneckBlock, 50, pretrained, **kwargs)
+
+
+def resnet101(pretrained=False, **kwargs):
+    """ResNet 101-layer model
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import resnet101
+
+            # build model
+            model = resnet101()
+
+            #build model and load imagenet pretrained weight
+            model = resnet101(pretrained=True)
+    """
+    return _resnet('resnet101', BottleneckBlock, 101, pretrained, **kwargs)
+
+
+def resnet152(pretrained=False, **kwargs):
+    """ResNet 152-layer model
+
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+
+    Examples:
+        .. code-block:: python
+
+            from hapi.vision.models import resnet152
+
+            # build model
+            model = resnet152()
+
+            #build model and load imagenet pretrained weight
+            model = resnet152(pretrained=True)
+    """
+    return _resnet('resnet152', BottleneckBlock, 152, pretrained, **kwargs)
