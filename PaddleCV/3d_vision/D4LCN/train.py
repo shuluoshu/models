@@ -50,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     """parse"""
-    parser = argparse.ArgumentParser("M3D-RPN train script")
+    parser = argparse.ArgumentParser("D4LCN train script")
     parser.add_argument(
         "--use_data_parallel",  # TODO
         type=ast.literal_eval,
@@ -113,12 +113,12 @@ def train():
     if not os.path.isdir(args.save_dir):
         os.makedirs(args.save_dir)
 
-    assert args.backbone in ['ResNet34', 'ResNet50'], \
-        "--backbone unsupported"
+    #assert args.backbone in ['ResNet34', 'ResNet50'], \
+    #    "--backbone unsupported"
 
     # conf init
     conf = core.init_config(args.conf)
-    paths = core.init_training_paths(args.conf)
+    paths = core.init_training_paths(args.conf, conf.result_dir)
     tracker = edict()
     start_iter = 0
     start_time = time.time()
@@ -131,12 +131,12 @@ def train():
     train_reader = d4lcn_reader.get_reader(conf.batch_size, mode='train')
     # pdb.set_trace()
     generate_anchors(conf, d4lcn_reader.data['train'], paths.output)
-    # compute_bbox_stats(conf, m3drpn_reader.data['train'], paths.output)
+    compute_bbox_stats(conf, d4lcn_reader.data['train'], paths.output)
     pickle_write(os.path.join(paths.output, 'conf.pkl'), conf)
 
     # show configuration
-    pretty = pretty_print('conf', conf)
-    logging.info(pretty)
+    #pretty = pretty_print('conf', conf)
+    #logging.info(pretty)
     # # train
     place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
         if args.use_data_parallel else fluid.CUDAPlace(0)
@@ -157,17 +157,18 @@ def train():
         # -----------------------------------------
 
         # training network
-        train_model, optimizer = core.init_training_model(conf, paths.output)
+        train_model, optimizer = core.init_training_model(conf, paths.output, args.conf) #remove backbone
+        #train_model, optimizer = core.init_training_model(conf, args.backbone, paths.output, args.conf)
 
         # setup loss
-        # criterion_det = RPN_3D_loss(conf)
+        criterion_det = RPN_3D_loss(conf)
 
-        # if args.use_data_parallel:
-        #     train_model = fluid.dygraph.parallel.DataParallel(train_model, strategy)
+        if args.use_data_parallel:
+            train_model = fluid.dygraph.parallel.DataParallel(train_model, strategy)
 
-        # if args.use_data_parallel:
-        #     train_reader = fluid.contrib.reader.distributed_batch_reader(
-        #         train_reader)
+        if args.use_data_parallel:
+            train_reader = fluid.contrib.reader.distributed_batch_reader(
+                train_reader)
         # # pretrain = fluid.load_program_state("pretrained_model/DenseNet121_pretrained")
         # #state_dict = train_model.state_dict()
         # #Convert
@@ -196,10 +197,13 @@ def train():
                 # if args.max_iter and total_batch_num == args.max_iter:
                 #     return
                 batch_start = time.time()
+                #pdb.set_trace()
 
                 images = np.array(
                     [x[0].reshape(3, 512, 1760) for x in data]).astype('float32')
-                imobjs = np.array([x[1] for x in data])
+                depths = np.array(
+                    [x[1].reshape(3, 512, 1760) for x in data]).astype('float32')
+                imobjs = np.array([x[2] for x in data])
                 # import pickle
                 # images = pickle.load(open("images.pkl","rb"))
                 # imobjs = pickle.load(open("imobjs.pkl","rb"))
@@ -208,14 +212,15 @@ def train():
                 # cur_iter = epo*100 + batch_id # TODO next_iter
                 # adjust_lr(conf, optimizer, cur_iter)
 
-                if len(np.array([x[1] for x in data])) != conf.batch_size:
+                if len(np.array([x[2] for x in data])) != conf.batch_size:
                     continue
 
                 img = to_variable(images)
+                depth = to_variable(depths)
                 # label = to_variable(y_data)
                 # label.stop_gradient = True
 
-                cls, prob, bbox_2d, bbox_3d, feat_size = train_model(img)
+                cls, prob, bbox_2d, bbox_3d, feat_size = train_model(img, depth)
 
                 # f=open('./cls_paddle.pkl','wb')
                 # pickle.dump(cls.numpy(),f)
@@ -231,64 +236,64 @@ def train():
                 # f.close()
 
                 # # loss
-                # det_loss, det_stats = criterion_det(cls, prob, bbox_2d, bbox_3d, imobjs, feat_size)
+                det_loss, det_stats = criterion_det(cls, prob, bbox_2d, bbox_3d, imobjs, feat_size)
 
-                # total_loss = det_loss
-                # stats = det_stats
+                total_loss = det_loss
+                stats = det_stats
 
-                # # backprop
-                # if total_loss > 0:
-                #     if args.use_data_parallel:
-                #         total_loss = train_model.scale_loss(total_loss)
-                #         total_loss.backward()
-                #         train_model.apply_collective_grads()
-                #     else:
-                #         total_loss.backward()
+                # backprop
+                if total_loss > 0:
+                    if args.use_data_parallel:
+                        total_loss = train_model.scale_loss(total_loss)
+                        total_loss.backward()
+                        train_model.apply_collective_grads()
+                    else:
+                        total_loss.backward()
 
-                #     # batch skip, simulates larger batches by skipping gradient step
-                #     if (not 'batch_skip' in conf) or ((batch_id + 1) % conf.batch_skip) == 0:
-                #         optimizer.minimize(total_loss)
-                #         optimizer.clear_gradients()
+                    # batch skip, simulates larger batches by skipping gradient step
+                    if (not 'batch_skip' in conf) or ((batch_id + 1) % conf.batch_skip) == 0:
+                        optimizer.minimize(total_loss)
+                        optimizer.clear_gradients()
 
-                # batch_end = time.time()
-                # train_batch_cost = batch_end - batch_start
+                batch_end = time.time()
+                train_batch_cost = batch_end - batch_start
 
                 # keep track of stats
-                # compute_stats(tracker, stats)
+                compute_stats(tracker, stats)
 
-                # # -----------------------------------------
-                # # display
-                # # -----------------------------------------
-                # iteration = epo * (d4lcn_reader.len/conf.batch_size) + batch_id
+                # -----------------------------------------
+                # display
+                # -----------------------------------------
+                iteration = epo * (d4lcn_reader.len/conf.batch_size) + batch_id
 
-                # if iteration % conf.display == 0 and iteration > start_iter:
-                #     # log results
-                #     log_stats(tracker, iteration, start_time, start_iter, conf.max_iter)
-                #     print( "epoch %d | batch step %d | iter %d, batch cost: %.5f, loss %0.3f" % \
-                #            (epo, batch_id, iteration, train_batch_cost, total_loss.numpy()))
+                if iteration % conf.display == 0 and iteration > start_iter:
+                    # log results
+                     log_stats(tracker, iteration, start_time, start_iter, conf.max_iter)
+                     print( "epoch %d | batch step %d | iter %d, batch cost: %.5f, loss %0.3f" % \
+                            (epo, batch_id, iteration, train_batch_cost, total_loss.numpy()))
 
-                #     # reset tracker
-                #     tracker = edict()
+                     # reset tracker
+                     tracker = edict()
 
                 # snapshot, do_test
 
-                # if iteration % conf.snapshot_iter == 0 and iteration > start_iter:
-                #     fluid.save_dygraph(train_model.state_dict(),
-                #                        '{}/iter{}_params'.format(paths.weights, iteration))
-                #     fluid.save_dygraph(optimizer.state_dict(),
-                #                        '{}/iter{}_opt'.format(paths.weights, iteration))
+                if iteration % conf.snapshot_iter == 0 and iteration > start_iter:
+                    fluid.save_dygraph(train_model.state_dict(),
+                                        '{}/iter{}_params'.format(paths.weights, iteration))
+                    fluid.save_dygraph(optimizer.state_dict(),
+                                       '{}/iter{}_opt'.format(paths.weights, iteration))
 
-                #     #do test
-                #     if conf.do_test:
-                #         train_model.phase=  "eval"
-                #         train_model.eval()
-                #         results_path = os.path.join(paths.results, 'results_{}'.format((epo)))
-                #     if conf.test_protocol.lower() == 'kitti':
-                #         results_path = os.path.join(results_path, 'data')
-                #         mkdir_if_missing(results_path, delete_if_exist=True)
-                #         test_kitti_3d(conf.dataset_test, train_model, conf, results_path, paths.data)
-                #     train_model.phase = "train"
-                #     train_model.train()
+                    #do test
+                    if conf.do_test:
+                        train_model.phase=  "eval"
+                        train_model.eval()
+                        results_path = os.path.join(paths.results, 'results_{}'.format((epo)))
+                    if conf.test_protocol.lower() == 'kitti':
+                        results_path = os.path.join(results_path, 'data')
+                        mkdir_if_missing(results_path, delete_if_exist=True)
+                        test_kitti_3d(conf.dataset_test, train_model, conf, results_path, paths.data)
+                    train_model.phase = "train"
+                    train_model.train()
 
 
 if __name__ == '__main__':

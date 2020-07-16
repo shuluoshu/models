@@ -23,8 +23,8 @@ from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear
 from paddle.fluid.dygraph.container import Sequential
 
 # from hapi.model import Model
-from download import get_weights_path_from_url
-
+from lib.download import get_weights_path_from_url
+import pdb
 
 class ResNetDilate(fluid.dygraph.Layer):
     def __init__(self, num_layer=50):
@@ -33,32 +33,46 @@ class ResNetDilate(fluid.dygraph.Layer):
             model_resnet = resnet50(pretrained=True)
         if num_layer == 101:
             model_resnet = resnet101(pretrained=True)
-
-        self.conv1 = model_resnet.conv
-        self.maxpool = model_resnet.pool
-        self.layer1 = model_resnet.layer_0
-        self.layer2 = model_resnet.layer_1
-        self.layer3 = model_resnet.layer_2
-        self.layer4 = model_resnet.layer_3
-        for i in range(len(self.layer4)):
-            if num_layer == 34:
-                self.layer4[i].conv1._conv._dilation = 2
-                self.layer4[i].conv1._conv._padding = 2
-                self.layer4[i].conv1._conv._stride = 1
+    
+        self.conv = model_resnet.conv
+        self.pool = model_resnet.pool
+        self.layer_0 = model_resnet.layer_0
+        self.layer_1 = model_resnet.layer_1
+        self.layer_2 = model_resnet.layer_2
+        self.layer_3 = model_resnet.layer_3
+        
+        for i in range(len(self.layer_3)):
+            if num_layer == 34: # TODO
+                self.layer_3[i].conv1._conv._dilation = 2
+                self.layer_3[i].conv1._conv._padding = 2
+                self.layer_3[i].conv1._conv._stride = 1
+                
             else:
-                self.layer4[i].conv2._conv._dilation = 2
-                self.layer4[i].conv2._conv._padding = 2
-                self.layer4[i].conv2._conv._stride = 1
+                
+                self.layer_3[i].conv1._conv._dilation = [2,2]
+                
+                self.layer_3[i].conv1._conv._padding = [2,2]
+                
+                self.layer_3[i].conv1._conv._stride = [1,1]
+            try:
+                
+                self.layer_3[i].short._conv._stride = [1,1]
+                
+            except:
+                continue
+        
+            
 
     def forward(self, x):
-        x = self.conv1(x)
-        x = self.maxpool(x)
+        x = self.conv(x)
+        x = self.pool(x)
 
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-
+        x = self.layer_0(x)
+        x = self.layer_1(x)
+        x = self.layer_2(x)
+        
+        x = self.layer_3(x)
+        
         return x
 
 
@@ -150,6 +164,7 @@ class BasicBlock(fluid.dygraph.Layer):
         else:
             short = self.short(inputs)
 
+        
         y = short + conv1
 
         return fluid.layers.relu(y)
@@ -194,13 +209,18 @@ class BottleneckBlock(fluid.dygraph.Layer):
 
     def forward(self, inputs):
         x = self.conv0(inputs)
+
         conv1 = self.conv1(x)
+
         conv2 = self.conv2(conv1)
+
 
         if self.shortcut:
             short = inputs
         else:
             short = self.short(inputs)
+
+
 
         x = fluid.layers.elementwise_add(x=short, y=conv2)
 
@@ -314,14 +334,19 @@ class ResNet(fluid.dygraph.Layer):
 
 def _resnet(arch, Block, depth, pretrained, **kwargs):
     model = ResNet(Block, depth, **kwargs)
-    if pretrained:
+    if 0:#pretrained:
         assert arch in model_urls, "{} model do not have a pretrained model now, you should set pretrained=False".format(
             arch)
+        
+        print(model_urls[arch])
+        #pdb.set_trace()
         weight_path = get_weights_path_from_url(model_urls[arch][0],
                                                 model_urls[arch][1])
         assert weight_path.endswith(
             '.pdparams'), "suffix of weight must be .pdparams"
-        model.load(weight_path)
+        #pdb.set_trace()
+
+        #model.load(weight_path)
     return model
 
 

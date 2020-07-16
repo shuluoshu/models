@@ -86,9 +86,10 @@ class D4lcnReader(object):
                 im_folder = os.path.join(train_folder, 'image_2', '')
                 depth_folder = os.path.join(train_folder, 'depth_2', '')
                 # get sorted filepaths
-                annlist = sorted(glob.glob(ann_folder + '*.txt'))  # 3712
-                imdb_start = time.time()
-                # pdb.set_trace()
+                annlist = sorted(glob(ann_folder + '*.txt'))  # 3712
+                #annlist = sorted(glob.glob(ann_folder + '*.txt'))  # 3712 OldVersion
+                #imdb_start = time.time()#OldVersion
+                imdb_start = time()
                 self.affine_size = None if not ('affine_size' in self.conf) else self.conf.affine_size
 
                 for annind, annpath in enumerate(annlist):
@@ -191,14 +192,16 @@ class D4lcnReader(object):
             im = cv2.imread(self.data['train'][index].path)
             if not self.use_seg:
                 if self.depth_channel == 3:
-                    depth = cv2.imread(self.imdb[index].path_depth)
+                    #depth = cv2.imread(self.imdb[index].path_depth)
+                    depth = cv2.imread(self.data['train'][index].path_depth)
                 else:
-                    depth = cv2.imread(self.imdb[index].path_depth, cv2.IMREAD_UNCHANGED)
+                    #depth = cv2.imread(self.imdb[index].path_depth, cv2.IMREAD_UNCHANGED)
+                    depth = cv2.imread(self.data['train'][index].path_depth, cv2.IMREAD_UNCHANGED)
                     depth = depth[:, :, np.newaxis]
                     depth = np.tile(depth, (1, 1, 3))
             else:
-                depth = cv2.imread(self.imdb[index].path_depth, cv2.IMREAD_UNCHANGED)
-                seg = cv2.imread(self.imdb[index].path_depth.replace('depth_2', 'seg'), cv2.IMREAD_UNCHANGED)
+                depth = cv2.imread(self.data['train'][index].path_depth, cv2.IMREAD_UNCHANGED)
+                seg = cv2.imread(self.data['train'][index].path_depth.replace('depth_2', 'seg'), cv2.IMREAD_UNCHANGED)
                 depth = depth[:, :, np.newaxis]
                 seg = seg[:, :, np.newaxis]
                 depth = np.tile(depth, (1, 1, 2))
@@ -241,7 +244,7 @@ class D4lcnReader(object):
                 im = np.concatenate((im, im_pre3), axis=2)
 
         # transform / data augmentation
-        im, depth, imobj = self.transform(im, depth, deepcopy(self.imdb[index]))
+        im, depth, imobj = self.transform(im, depth, deepcopy(self.data['train'][index]))
 
         im = np.transpose(im, [2, 0, 1])
         depth = np.transpose(depth, [2, 0, 1])
@@ -277,8 +280,8 @@ class D4lcnReader(object):
             # pdb.set_trace()
             # imgs_idxs = np.arange(imgs)
             for ind in idxs:
-                augmented_img, im_obj = self._augmented_single(ind) 
-                batch_out.append([augmented_img, im_obj]) 
+                augmented_img, depth, im_obj = self._augmented_single(ind) 
+                batch_out.append([augmented_img, depth, im_obj]) 
                 if len(batch_out) == batch_size:
                     yield batch_out
                     batch_out = []

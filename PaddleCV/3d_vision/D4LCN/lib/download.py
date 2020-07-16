@@ -26,6 +26,7 @@ import time
 from collections import OrderedDict
 from paddle.fluid.dygraph.parallel import ParallelEnv
 
+
 try:
     from tqdm import tqdm
 except:
@@ -157,6 +158,8 @@ def get_path_from_url(url, root_dir, md5sum=None, check_exist=True):
     assert is_url(url), "downloading from {} not a url".format(url)
     # parse path after download to decompress under root_dir
     fullpath = _map_path(url, root_dir)
+ 
+    
 
     if osp.exists(fullpath) and check_exist and _md5check(fullpath, md5sum):
         logger.info("Found {}".format(fullpath))

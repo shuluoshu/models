@@ -1,6 +1,7 @@
 # import torch.nn as nn
 from lib.rpn_util import *
-from backbone import resnet
+from models.backbone import resnet
+#from backbone import resnet
 # import torch
 import numpy as np
 # from models.deform_conv_v2 import *
@@ -8,27 +9,201 @@ import paddle.fluid as fluid
 from paddle.fluid.param_attr import ParamAttr
 
 from paddle.fluid.layer_helper import LayerHelper
-from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear
+from paddle.fluid.dygraph.nn import Conv2D, Pool2D, BatchNorm, Linear, Dropout
 from paddle.fluid.dygraph.container import Sequential
 from paddle.fluid.initializer import Normal
+from models.deform_conv_v2 import DeformConv2DV2
 
 
-# def dynamic_local_filtering(x, depth, dilated=1):
-#     padding = nn.ReflectionPad2d(dilated)  # ConstantPad2d(1, 0)
-#     pad_depth = padding(depth)
-#     n, c, h, w = x.size()
-#     # y = torch.cat((x[:, int(c/2):, :, :], x[:, :int(c/2), :, :]), dim=1)
-#     # x = x + y
-#     y = torch.cat((x[:, -1:, :, :], x[:, :-1, :, :]), dim=1)
-#     z = torch.cat((x[:, -2:, :, :], x[:, :-2, :, :]), dim=1)
-#     x = (x + y + z) / 3
-#     pad_x = padding(x)
-#     filter = (pad_depth[:, :, dilated: dilated + h, dilated: dilated + w] * pad_x[:, :, dilated: dilated + h, dilated: dilated + w]).clone()
-#     for i in [-dilated, 0, dilated]:
-#         for j in [-dilated, 0, dilated]:
-#             if i != 0 or j != 0:
-#                 filter += (pad_depth[:, :, dilated + i: dilated + i + h, dilated + j: dilated + j + w] * pad_x[:, :, dilated + i: dilated + i + h, dilated + j: dilated + j + w]).clone()
-#     return filter / 9
+def initial_type(name,
+                 input_channels,
+                 init="kaiming",
+                 use_bias=False,
+                 filter_size=0,
+                 stddev=0.02):
+    if init == "kaiming":
+        fan_in = input_channels * filter_size * filter_size
+        bound = 1 / math.sqrt(fan_in)
+        param_attr = fluid.ParamAttr(
+            name=name + "weight",
+            initializer=fluid.initializer.Uniform(
+                low=-bound, high=bound))
+        if use_bias == True:
+            bias_attr = fluid.ParamAttr(
+                name=name + 'bias',
+                initializer=fluid.initializer.Uniform(
+                    low=-bound, high=bound))
+        else:
+            bias_attr = False
+    else:
+        param_attr = fluid.ParamAttr(
+            name=name + "weight",
+            initializer=fluid.initializer.NormalInitializer(
+                loc=0.0, scale=stddev))
+        if use_bias == True:
+            bias_attr = fluid.ParamAttr(
+                name=name + "bias", initializer=fluid.initializer.Constant(0.0))
+        else:
+            bias_attr = False
+    return param_attr, bias_attr
+        
+
+def dynamic_local_filtering(x, depth, dilated=1):
+    # shift pooling
+    y = fluid.layers.concat([x[:, -1:, :, :], x[:, :-1, :, :]], axis=1)
+    z = fluid.layers.concat([x[:, -2:, :, :], x[:, :-2, :, :]], axis=1)
+    x = (x + y + z) / 3.
+
+    h = int(x.shape[2])
+    w = int(x.shape[3])
+
+    # pad x & depth for XXX
+    paddings = [dilated] * 4
+    x = fluid.layers.pad2d(x, paddings=paddings, mode='reflect')
+    depth = fluid.layers.pad2d(depth, paddings=paddings, mode='reflect')
+
+    out = depth[:, :, dilated: -dilated, dilated: -dilated] * x[:, :, dilated: -dilated, dilated: -dilated]
+    for i in [-dilated, 0, dilated]:
+        for j in [-dilated, 0, dilated]:
+            if i != 0 or j != 0:
+                out += depth[:, :, dilated + i: h + dilated + i, dilated + j: w + dilated + j] * x[:, :, dilated + i: h + dilated + i, dilated + j: w + dilated + j]
+    return out / 9.
+
+
+class ConvLayer(fluid.dygraph.Layer):
+    def __init__(self,
+                 num_channels,
+                 num_filters,
+                 filter_size,
+                 padding=0,
+                 stride=1,
+                 groups=None,
+                 act=None,
+                 name=None):
+        super(ConvLayer, self).__init__()
+        
+        param_attr, bias_attr = initial_type(
+                    name=name,
+                    input_channels=num_channels,
+                    use_bias=True,
+                    filter_size=filter_size)
+        
+        self.num_filters = num_filters
+        self._conv = Conv2D(
+            num_channels=num_channels,
+            num_filters=num_filters,
+            filter_size=filter_size,
+            padding=padding,
+            stride=stride,
+            groups=groups,
+            act=act,
+            param_attr=param_attr,
+            bias_attr=bias_attr)
+
+    def forward(self, inputs):
+        x = self._conv(inputs)        
+        return x
+
+
+class AdaptiveDiatedLayer(fluid.dygraph.Layer):
+    def __init__(self,
+                 pool_size,
+                 pool_type,
+                 num_channels,
+                 num_filters,
+                 filter_size,
+                 padding=0,
+                 stride=1,
+                 groups=None,
+                 act='relu',
+                 name=None):
+        super(AdaptiveDiatedLayer, self).__init__()
+
+        self.num_channels = num_channels
+
+        param_attr, _ = initial_type(name=name,
+                                  input_channels=num_channels,
+                                  filter_size=filter_size)
+        self.pool_size = pool_size
+        self.pool_type = pool_type
+        self._conv = Conv2D(
+            num_channels=num_channels,
+            num_filters=num_filters,
+            filter_size=filter_size,
+            padding=padding,
+            stride=stride,
+            groups=groups,
+            act=None,
+            param_attr=param_attr)
+
+        bn_name = name + "_bn"
+        self._bn = BatchNorm(num_channels,
+                             param_attr=ParamAttr(name=bn_name + "weight"),
+                             bias_attr=ParamAttr(name=bn_name + "bias"),
+                             moving_mean_name=bn_name + "mean",
+                             moving_variance_name=bn_name + "variance",
+                             act=act)
+
+    def forward(self, x, depth):
+        
+        weight = fluid.layers.adaptive_pool2d(x, pool_size=self.pool_size, pool_type=self.pool_type)
+        weight = self._conv(weight)
+        weight = fluid.layers.reshape(weight, [-1, self.num_channels, 1, 3])
+        weight = fluid.layers.softmax(weight, axis=-1)
+        x = dynamic_local_filtering(x, depth, dilated=1) * weight[:, :, :, 0:1] \
+                + dynamic_local_filtering(x, depth, dilated=2) * weight[:, :, :, 1:2] \
+                + dynamic_local_filtering(x, depth, dilated=3) * weight[:, :, :, 2:3]
+        x = self._bn(x)
+
+        return x
+
+
+class DeformLayer(fluid.dygraph.Layer):
+    def __init__(self,
+                 num_channels,
+                 num_filters,
+                 filter_size,
+                 stride=1,
+                 padding=0,
+                 dilation=1,
+                 groups=None,
+                 deformable_groups=None,
+                 im2col_step=None,
+                 param_attr=None,
+                 bias_attr=None,
+                 dtype='float32',
+                 name=None):
+        assert param_attr is not False, "param_attr should not be False here."
+        super(DeformLayer, self).__init__()
+        self.p_conv = ConvLayer(num_channels=num_channels,
+                                num_filters=2*filter_size*filter_size,
+                                filter_size=3,
+                                padding=1,
+                                stride=stride,
+                                name=name+'offset_conv')
+        self.m_conv = ConvLayer(num_channels=num_channels,
+                                num_filters=filter_size*filter_size,
+                                filter_size=3,
+                                padding=1,
+                                stride=stride,
+                                name=name+'mask_conv')
+        self.deform_conv = DeformConv2DV2(num_channels=num_channels,
+                                          num_filters=num_filters,
+                                          filter_size=filter_size,
+                                          stride=stride,
+                                          padding=padding,
+                                          dilation=dilation,
+                                          groups=groups,
+                                          deformable_groups=deformable_groups,
+                                          im2col_step=im2col_step,
+                                          param_attr=param_attr,
+                                          bias_attr=bias_attr,
+                                          dtype=dtype)
+
+    def forward(self, x):
+        offset = self.p_conv(x)
+        mask = self.m_conv(x)
+        return self.deform_conv(x, offset, mask)
 
 class RPN(fluid.dygraph.Layer):
 
@@ -37,247 +212,249 @@ class RPN(fluid.dygraph.Layer):
         super(RPN, self).__init__()
 
         self.base = resnet.ResNetDilate(conf.base_model)
-        # self.adaptive_diated = conf.adaptive_diated
-        # self.dropout_position = conf.dropout_position
-        # self.use_dropout = conf.use_dropout
-        # self.drop_channel = conf.drop_channel
-        # self.use_corner = conf.use_corner
-        # self.corner_in_3d = conf.corner_in_3d
-        # self.deformable = conf.deformable
-
-        # if conf.use_rcnn_pretrain:
-        #     # print(self.base.state_dict().keys())
-        #     if conf.base_model == 101:
-        #         pretrained_model = torch.load('faster_rcnn_1_10_14657.pth')['model']
-        #         rename_dict = {'RCNN_top.0': 'layer4', 'RCNN_base.0': 'conv1', 'RCNN_base.1': 'bn1', 'RCNN_base.2': 'relu',
-        #                        'RCNN_base.3': 'maxpool', 'RCNN_base.4': 'layer1',
-        #                        'RCNN_base.5': 'layer2', 'RCNN_base.6': 'layer3'}
-        #         change_dict = {}
-        #         for item in pretrained_model.keys():
-        #             for rcnn_name in rename_dict.keys():
-        #                 if rcnn_name in item:
-        #                     change_dict[item] = item.replace(rcnn_name, rename_dict[rcnn_name])
-        #                     break
-        #         pretrained_model = {change_dict[k]: v for k, v in pretrained_model.items() if k in change_dict}
-        #         self.base.load_state_dict(pretrained_model)
-
-        #     elif conf.base_model == 50:
-        #         pretrained_model = torch.load('res50_faster_rcnn_iter_1190000.pth',
-        #                                       map_location=lambda storage, loc: storage)
-        #         pretrained_model = {k.replace('resnet.', ''): v for k, v in pretrained_model.items() if 'resnet' in k}
-        #         # print(pretrained_model.keys())
-        #         self.base.load_state_dict(pretrained_model)
-
+        self.adaptive_diated = conf.adaptive_diated
+        self.dropout_position = conf.dropout_position
+        self.use_dropout = conf.use_dropout
+        self.drop_channel = conf.drop_channel
+        self.use_corner = conf.use_corner
+        self.corner_in_3d = conf.corner_in_3d
+        self.deformable = conf.deformable
 
         self.depthnet = resnet.ResNetDilate(50)
 
-        # if self.adaptive_diated:
-        #     self.adaptive_softmax = nn.Softmax(dim=3)
+        if self.deformable:
+            self.deform_layer = DeformLayer(512, 512, 3, padding=1, bias_attr=False, name="deform_layer")
 
-        #     self.adaptive_layers = nn.Sequential(
-        #         nn.AdaptiveMaxPool2d(3),
-        #         nn.Conv2d(512, 512 * 3, 3, padding=0),
-        #     )
-        #     self.adaptive_bn = nn.BatchNorm2d(512)
-        #     self.adaptive_relu = nn.ReLU(inplace=True)
+        if self.adaptive_diated:
+            self.adaptive_layer = AdaptiveDiatedLayer(3, 'max', 512, 512 * 3, 3, padding=0, name='adaptive_diate1')
+            self.adaptive_layer1 = AdaptiveDiatedLayer(3, 'max', 1024, 1024 * 3, 3, padding=0, name='adaptive_diated2')
 
-        #     self.adaptive_layers1 = nn.Sequential(
-        #         nn.AdaptiveMaxPool2d(3),
-        #         nn.Conv2d(1024, 1024 * 3, 3, padding=0),
-        #     )
-        #     self.adaptive_bn1 = nn.BatchNorm2d(1024)
-        #     self.adaptive_relu1 = nn.ReLU(inplace=True)
+        # settings
+        self.phase = phase
+        self.num_classes = len(conf['lbls']) + 1
+        self.num_anchors = conf['anchors'].shape[0]
+        #self.num_anchors = 32
 
-        # if self.deformable:
-        #     self.deform_layer = DeformConv2d(512, 512, 3, padding=1, bias=False, modulation=True)
+        self.prop_feats = ConvLayer(num_channels=2048,
+                                    num_filters=512,
+                                    filter_size=3,
+                                    padding=1,
+                                    act='relu',
+                                    name='rpn_prop_feats')
+        if self.use_dropout:
+            self.dropout = Dropout(p=conf.dropout_rate, dropout_implementation='upscale_in_train')
 
-        # # settings
-        # self.phase = phase
-        # self.num_classes = len(conf['lbls']) + 1
-        # self.num_anchors = conf['anchors'].shape[0]
+        if self.drop_channel:
+            self.drop_channel = Dropout(p=0.3, dropout_implementation='upscale_in_train')
 
-        # self.prop_feats = nn.Sequential(
-        #     nn.Conv2d(2048, 512, 3, padding=1),
-        #     nn.ReLU(inplace=True),
-        # )
-        # if self.use_dropout:
-        #     self.dropout = nn.Dropout(p=conf.dropout_rate)
+        self.cls = ConvLayer(num_channels=self.prop_feats.num_filters, 
+                             num_filters=self.num_classes*self.num_anchors,
+                             filter_size=1,
+                             name='rpn_cls')
 
-        # if self.drop_channel:
-        #     self.dropout_channel = nn.Dropout2d(p=0.3)
+        self.bbox_x = ConvLayer(num_channels=self.prop_feats.num_filters, 
+                                num_filters=self.num_anchors,
+                                filter_size=1,
+                                name='rpn_bbox_x')
+        
+        self.bbox_y = ConvLayer(num_channels=self.prop_feats.num_filters, 
+                                num_filters=self.num_anchors,
+                                filter_size=1,
+                                name='rpn_bbox_y')
 
-        # # outputs
-        # self.cls = nn.Conv2d(self.prop_feats[0].out_channels, self.num_classes * self.num_anchors, 1)
+        self.bbox_w = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                num_filters=self.num_anchors,
+                                filter_size=1,
+                                name='rpn_bbox_w')
 
-        # # bbox 2d
-        # self.bbox_x = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_y = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_w = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_h = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
+        self.bbox_h = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                num_filters=self.num_anchors,
+                                filter_size=1,
+                                name='rpn_bbox_h')
 
-        # # bbox 3d
-        # self.bbox_x3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_y3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_z3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_w3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_h3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_l3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
-        # self.bbox_rY3d = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors, 1)
+        self.bbox_x3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_x3d')
 
-        # if self.corner_in_3d:
-        #     self.bbox_3d_corners = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 18, 1)  # 2 * 8 + 2
-        #     self.bbox_vertices = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 24, 1)  # 3 * 8
-        # elif self.use_corner:
-        #     self.bbox_vertices = nn.Conv2d(self.prop_feats[0].out_channels, self.num_anchors * 24, 1)
+        self.bbox_y3d = ConvLayer(num_channels=self.prop_feats.num_filters, 
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_y3d')
 
-        # self.softmax = nn.Softmax(dim=1)
+        self.bbox_z3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_z3d')
+        
+        self.bbox_w3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_w3d')
 
-        # self.feat_stride = conf.feat_stride
-        # self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
-        # self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride, convert_tensor=True)
-        # self.rois = self.rois.type(torch.cuda.FloatTensor)
-        # self.anchors = conf.anchors
+        self.bbox_h3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_h3d')
+
+        self.bbox_l3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                  num_filters=self.num_anchors,
+                                  filter_size=1,
+                                  name='rpn_bbox_l3d')
+
+        self.bbox_rY3d = ConvLayer(num_channels=self.prop_feats.num_filters,
+                                   num_filters=self.num_anchors,
+                                   filter_size=1,
+                                   name='rpn_bbox_rY3d')
+
+        if self.corner_in_3d:
+            self.bbox_3d_corners = ConvLayer(512, self.num_anchors * 18, 1, name='bbox_3d_corners')
+            self.bbox_vertices = ConvLayer(512, self.num_anchors * 24, 1, name='bbox_vertices')
+        elif self.use_corner:
+            self.bbox_vertices = ConvLayer(512, self.num_anchors * 24, 1, name='bbox_vertices')
+        
+        self.feat_stride = conf.feat_stride
+
+        if self.phase != "train":
+            self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
+            self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride)
+            self.anchors = conf.anchors
 
     def forward(self, x, depth):
+        batch_size = x.shape[0]
+        
+        x = self.base.conv(x)
+        
+        depth = self.depthnet.conv(depth)
+        x = self.base.pool(x)
+        depth = self.depthnet.pool(depth)
 
-        batch_size = x.size(0)
-
-        x = self.base.conv1(x)
-        depth = self.depthnet.conv1(depth)
-        x = self.base.maxpool(x)
-        depth = self.depthnet.maxpool(depth)
-
-        x = self.base.layer1(x)
-        depth = self.depthnet.layer1(depth)
+        x = self.base.layer_0(x)
+        depth = self.depthnet.layer_0(depth)
+        
         # x = dynamic_local_filtering(x, depth, dilated=1) + dynamic_local_filtering(x, depth, dilated=2) + dynamic_local_filtering(x, depth, dilated=3)
 
-        x = self.base.layer2(x)
-        depth = self.depthnet.layer2(depth)
+        x = self.base.layer_1(x)
+        
+        depth = self.depthnet.layer_1(depth)
 
-        # if self.deformable:
-        #     depth = self.deform_layer(depth)
-        #     x = x * depth
+        if self.deformable:
+            depth = self.deform_layer(depth)
+            x = x * depth
 
-        # if self.adaptive_diated:
-        #     weight = self.adaptive_layers(x).reshape(-1, 512, 1, 3)
-        #     weight = self.adaptive_softmax(weight)
-        #     x = dynamic_local_filtering(x, depth, dilated=1) * weight[:, :, :, 0:1] \
-        #         + dynamic_local_filtering(x, depth, dilated=2) * weight[:, :, :, 1:2] \
-        #         + dynamic_local_filtering(x, depth, dilated=3) * weight[:, :, :, 2:3]
-        #     x = self.adaptive_bn(x)
-        #     x = self.adaptive_relu(x)
-        # else:
-        #     x = dynamic_local_filtering(x, depth, dilated=1) + dynamic_local_filtering(x, depth, dilated=2) + dynamic_local_filtering(x, depth, dilated=3)
+        if self.adaptive_diated:
+            x = self.adaptive_layer(x, depth) # TODO
+        else:
+            x = dynamic_local_filtering(x, depth, dilated=1) + dynamic_local_filtering(x, depth, dilated=2) + dynamic_local_filtering(x, depth, dilated=3)
 
-        # if self.use_dropout and self.dropout_position == 'adaptive':
-        #     x = self.dropout(x)
+        if self.use_dropout and self.dropout_position == 'adaptive':
+            x = self.dropout(x)
 
-        # if self.drop_channel:
-        #     x = self.dropout_channel(x)
+        if self.drop_channel: # TODO
+            nc = fluid.layers.ones_like(x[:, :, 0, 0])
+            dropped_nc = self.drop_channel(nc)
+            x = fluid.layers.elementwise_mul(x, nc, axis=0)
 
-        x = self.base.layer3(x)
-        depth = self.depthnet.layer3(depth)
+        x = self.base.layer_2(x)
+        
+        depth = self.depthnet.layer_2(depth)
 
-        # if self.adaptive_diated:
-        #     weight = self.adaptive_layers1(x).reshape(-1, 1024, 1, 3)
-        #     weight = self.adaptive_softmax(weight)
-        #     x = dynamic_local_filtering(x, depth, dilated=1) * weight[:, :, :, 0:1] \
-        #         + dynamic_local_filtering(x, depth, dilated=2) * weight[:, :, :, 1:2] \
-        #         + dynamic_local_filtering(x, depth, dilated=3) * weight[:, :, :, 2:3]
-        #     x = self.adaptive_bn1(x)
-        #     x = self.adaptive_relu1(x)
-        # else:
-        #     x = x * depth
+        if self.adaptive_diated:
+            x = self.adaptive_layer1(x, depth)
+        else:
+            x = x * depth
+            
 
-        # x = self.base.layer4(x)
-        # depth = self.depthnet.layer4(depth)
-        # x = x * depth
+        # x = fluid.layers.expand(x, [1, 2, 1, 1])
+        # depth = fluid.layers.expand(depth, [1, 2, 1, 1])
 
-        # if self.use_dropout and self.dropout_position == 'early':
-        #     x = self.dropout(x)
 
-        # prop_feats = self.prop_feats(x)
+        x = self.base.layer_3(x)
+        
+        depth = self.depthnet.layer_3(depth)
 
-        # if self.use_dropout and self.dropout_position == 'late':
-        #     prop_feats = self.dropout(prop_feats)
+        
+        
+        x = x * depth
 
-        # cls = self.cls(prop_feats)
+        if self.use_dropout and self.dropout_position == 'early':
+            x = self.dropout(x)
 
-        # # bbox 2d
-        # bbox_x = self.bbox_x(prop_feats)
-        # bbox_y = self.bbox_y(prop_feats)
-        # bbox_w = self.bbox_w(prop_feats)
-        # bbox_h = self.bbox_h(prop_feats)
+        prop_feats = self.prop_feats(x)
 
-        # # bbox 3d
-        # bbox_x3d = self.bbox_x3d(prop_feats)
-        # bbox_y3d = self.bbox_y3d(prop_feats)
-        # bbox_z3d = self.bbox_z3d(prop_feats)
-        # bbox_w3d = self.bbox_w3d(prop_feats)
-        # bbox_h3d = self.bbox_h3d(prop_feats)
-        # bbox_l3d = self.bbox_l3d(prop_feats)
-        # bbox_rY3d = self.bbox_rY3d(prop_feats)
-        # # targets_dx, targets_dy, delta_z, scale_w, scale_h, scale_l, deltaRotY
+        if self.use_dropout and self.dropout_position == 'late':
+            prop_feats = self.dropout(prop_feats)
 
-        # feat_h = cls.size(2)
-        # feat_w = cls.size(3)
+        cls = self.cls(prop_feats)
 
-        # # reshape for cross entropy
-        # cls = cls.view(batch_size, self.num_classes, feat_h * self.num_anchors, feat_w)
+        # bbox 2d
+        bbox_x = self.bbox_x(prop_feats)
+        bbox_y = self.bbox_y(prop_feats)
+        bbox_w = self.bbox_w(prop_feats)
+        bbox_h = self.bbox_h(prop_feats)
 
-        # # score probabilities
-        # prob = self.softmax(cls)
+        # bbox 3d
+        bbox_x3d = self.bbox_x3d(prop_feats)
+        bbox_y3d = self.bbox_y3d(prop_feats)
+        bbox_z3d = self.bbox_z3d(prop_feats)
+        bbox_w3d = self.bbox_w3d(prop_feats)
+        bbox_h3d = self.bbox_h3d(prop_feats)
+        bbox_l3d = self.bbox_l3d(prop_feats)
+        bbox_rY3d = self.bbox_rY3d(prop_feats)
+        # targets_dx, targets_dy, delta_z, scale_w, scale_h, scale_l, deltaRotY
 
-        # # reshape for consistency
-        # # although it's the same with x.view(batch_size, -1, 1) when c == 1, useful when c > 1
-        # bbox_x = flatten_tensor(bbox_x.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_y = flatten_tensor(bbox_y.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_w = flatten_tensor(bbox_w.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_h = flatten_tensor(bbox_h.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
+        batch_size, c, feat_h, feat_w = cls.shape
+        feat_size = fluid.layers.shape(cls)[2:4]
 
-        # bbox_x3d = flatten_tensor(bbox_x3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_y3d = flatten_tensor(bbox_y3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_z3d = flatten_tensor(bbox_z3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_w3d = flatten_tensor(bbox_w3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_h3d = flatten_tensor(bbox_h3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_l3d = flatten_tensor(bbox_l3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
-        # bbox_rY3d = flatten_tensor(bbox_rY3d.view(batch_size, 1, feat_h * self.num_anchors, feat_w))
+        # reshape for cross entropy
+        cls = fluid.layers.reshape(x=cls, shape=[batch_size, self.num_classes, feat_h * self.num_anchors, feat_w])
+        # score probabilities
+        prob = fluid.layers.softmax(cls, axis=1)
 
-        # # bundle
-        # bbox_2d = torch.cat((bbox_x, bbox_y, bbox_w, bbox_h), dim=2)
-        # bbox_3d = torch.cat((bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d), dim=2)
+        # reshape for consistency
+        bbox_x = flatten_tensor(fluid.layers.reshape(x=bbox_x, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_y = flatten_tensor(fluid.layers.reshape(x=bbox_y, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_w = flatten_tensor(fluid.layers.reshape(x=bbox_w, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_h = flatten_tensor(fluid.layers.reshape(x=bbox_h, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
 
-        # if self.corner_in_3d:
-        #     corners_3d = self.bbox_3d_corners(prop_feats)
-        #     corners_3d = flatten_tensor(corners_3d.view(batch_size, 18, feat_h * self.num_anchors, feat_w))
-        #     bbox_vertices = self.bbox_vertices(prop_feats)
-        #     bbox_vertices = flatten_tensor(bbox_vertices.view(batch_size, 24, feat_h * self.num_anchors, feat_w))
-        # elif self.use_corner:
-        #     bbox_vertices = self.bbox_vertices(prop_feats)
-        #     bbox_vertices = flatten_tensor(bbox_vertices.view(batch_size, 24, feat_h * self.num_anchors, feat_w))
+        bbox_x3d = flatten_tensor(fluid.layers.reshape(x=bbox_x3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_y3d = flatten_tensor(fluid.layers.reshape(x=bbox_y3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_z3d = flatten_tensor(fluid.layers.reshape(x=bbox_z3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_w3d = flatten_tensor(fluid.layers.reshape(x=bbox_w3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_h3d = flatten_tensor(fluid.layers.reshape(x=bbox_h3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_l3d = flatten_tensor(fluid.layers.reshape(x=bbox_l3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
+        bbox_rY3d = flatten_tensor(fluid.layers.reshape(x=bbox_rY3d, shape=[batch_size, 1, feat_h * self.num_anchors, feat_w]))
 
-        # feat_size = [feat_h, feat_w]
+        # bundle
+        bbox_2d = fluid.layers.concat(input=[bbox_x, bbox_y, bbox_w, bbox_h], axis=2)
+        bbox_3d = fluid.layers.concat(input=[bbox_x3d, bbox_y3d, bbox_z3d, bbox_w3d, bbox_h3d, bbox_l3d, bbox_rY3d], axis=2)
+        
+        if self.corner_in_3d:
+            corners_3d = self.bbox_3d_corners(prop_feats)
+            corners_3d = fluid.layers.reshape(corners_3d, [batch_size, 18, feat_h * self.num_anchors, feat_w])
+            corners_3d = flatten_tensor(corners_3d)
+            bbox_vertices = self.bbox_vertices(prop_feats)
+            corners_3d = fluid.layers.reshape(corners_3d, [batch_size, 24, feat_h * self.num_anchors, feat_w])
+            corners_3d = flatten_tensor(corners_3d)
+        elif self.use_corner:
+            bbox_vertices = self.bbox_vertices(prop_feats)
+            corners_3d = fluid.layers.reshape(corners_3d, [batch_size, 24, feat_h * self.num_anchors, feat_w])
+            corners_3d = flatten_tensor(corners_3d)
 
-        # cls = flatten_tensor(cls)
-        # prob = flatten_tensor(prob)
+        cls = flatten_tensor(cls)
+        prob = flatten_tensor(prob)
 
-        if self.training:
-            #print(cls.size(), prob.size(), bbox_2d.size(), bbox_3d.size(), feat_size)
-            # if self.corner_in_3d:
-            #     return cls, prob, bbox_2d, bbox_3d, torch.from_numpy(np.array(feat_size)).cuda(), bbox_vertices, corners_3d
-            # elif self.use_corner:
-            #     return cls, prob, bbox_2d, bbox_3d, torch.from_numpy(np.array(feat_size)).cuda(), bbox_vertices
-            # else:
-                return cls, prob, bbox_2d, bbox_3d, feat_size
+        if self.phase == "train":
+            # TODO
+            return cls, prob, bbox_2d, bbox_3d, feat_size
 
         else:
-
-            # if self.feat_size[0] != feat_h or self.feat_size[1] != feat_w:
-            #     self.feat_size = [feat_h, feat_w]
-            #     self.rois = locate_anchors(self.anchors, self.feat_size, self.feat_stride, convert_tensor=True)
-            #     self.rois = self.rois.type(torch.cuda.FloatTensor)
-
-            return cls, prob, bbox_2d, bbox_3d, feat_size, self.rois
+            if self.feat_size[0] != feat_h or self.feat_size[1] != feat_w:
+                #self.feat_size = [feat_h, feat_w]
+                #self.rois = locate_anchors(self.anchors, self.feat_size, self.feat_stride)
+                self.rois = locate_anchors(self.anchors, [feat_h, feat_w], self.feat_stride)
+        
+        return cls, prob, bbox_2d, bbox_3d, feat_size, self.rois
 
 
 def build(conf, phase='train'):
@@ -285,6 +462,32 @@ def build(conf, phase='train'):
     train = phase.lower() == 'train'
 
     rpn_net = RPN(phase, conf)
+
+    # pretrain 
+    if 'pretrained' in conf and conf.pretrained is not None:
+        print("load pretrain model from ", conf.pretrained)
+        src_weights, _ = fluid.load_dygraph(conf.pretrained)
+        src_weights_depthnet = src_weights.copy()
+        #pdb.set_trace()
+        #rpn_net.base.set_dict(src_weights, use_structured_name=False)
+        #rpn_net.base.set_dict(pretrained, use_structured_name=True)
+        src_keylist = list(src_weights.keys())
+        
+        dst_keylist_base = list(rpn_net.base.state_dict().keys())
+        
+        dst_keylist_depthnet = list(rpn_net.depthnet.state_dict().keys())
+        for key in dst_keylist_base:
+            if key not in src_keylist:
+                #print(key)
+                src_weights[key] = rpn_net.base.state_dict()[key]
+        rpn_net.base.set_dict(src_weights, use_structured_name=True)
+        
+        for key in dst_keylist_depthnet:
+            if key not in src_keylist:
+                #print(key)
+                src_weights_depthnet[key] = rpn_net.depthnet.state_dict()[key]
+        rpn_net.depthnet.set_dict(src_weights_depthnet, use_structured_name=True)
+
 
     if train: rpn_net.train()
     else: rpn_net.eval()

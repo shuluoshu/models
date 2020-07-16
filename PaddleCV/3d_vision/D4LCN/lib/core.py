@@ -31,7 +31,7 @@ from paddle.fluid.dygraph.base import to_variable
 from paddle.fluid.proto.framework_pb2 import VarType
 from paddle.fluid.layers.learning_rate_scheduler import _decay_step_counter
 import paddle.fluid as fluid
-
+import pdb
 # stop python from writing so much bytecode
 sys.dont_write_bytecode = True
 
@@ -137,7 +137,8 @@ def adjust_lr(conf): # TODO onecycle
          
 
 
-def init_training_model(conf, backbone, cache_folder, conf_name):
+#def init_training_model(conf, backbone, cache_folder, conf_name):
+def init_training_model(conf, cache_folder, conf_name):
     """
     This function is meant to load the training model and optimizer, which expects
     ./model/<conf.model>.py to be the pytorch model file.
@@ -151,11 +152,11 @@ def init_training_model(conf, backbone, cache_folder, conf_name):
     # (re-) copy the model file
     if os.path.exists(dst_path): os.remove(dst_path)
     shutil.copyfile(src_path, dst_path)
-    shutil.copyfile(os.path.join('.', 'scripts', 'config', conf_name + '.py'), os.path.join(cache_folder, conf_name + '.py')) # TODO
+    shutil.copyfile(os.path.join( 'config', conf_name + '.py'), os.path.join(cache_folder, conf_name + '.py')) # TODO
 
     # load and build
     network = absolute_import(dst_path)
-    network = network.build(conf, backbone, 'train')
+    network = network.build(conf, 'train')
 
     # multi-gpu
     #network = torch.nn.DataParallel(network)
@@ -188,8 +189,7 @@ def init_training_model(conf, backbone, cache_folder, conf_name):
         wd = conf.weight_decay
         optimizer = fluid.optimizer.Adamax(learning_rate=lr, regularization=fluid.regularizer.L2Decay(wd), parameter_list=network.parameters())
         
-
-    return network, optimizer, lr
+    return network, optimizer
 
 
 
