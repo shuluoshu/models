@@ -1468,7 +1468,8 @@ def test_kitti_3d(dataset_test, test_split, net, rpn_conf, results_path, test_pa
     """
 
     # import read_kitti_cal
-    from lib.imdb_util import read_kitti_cal
+    
+    from data.d4lcn_reader import read_kitti_cal
 
     # test_split = 'validation'
     imlist = list_files(os.path.join(test_path, dataset_test, test_split, 'image_2', ''), '*.png')
@@ -1477,7 +1478,7 @@ def test_kitti_3d(dataset_test, test_split, net, rpn_conf, results_path, test_pa
                             rpn_conf.depth_std, rpn_conf.use_rcnn_pretrain)
 
     # fix paths slightly
-    _, test_iter, _ = file_parts(results_path.replace('/data', ''))
+    _, test_iter, _ = file_parts(results_path.replace('/dataset', ''))
     test_iter = test_iter.replace('results_', '')
 
     # init

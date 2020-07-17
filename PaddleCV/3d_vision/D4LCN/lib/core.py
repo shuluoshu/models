@@ -653,7 +653,7 @@ def init_training_paths(conf_name, result_dir, use_tmp_folder=None): #TODO
     # make paths
     paths = edict()
     paths.base = os.getcwd()
-    paths.data = os.path.join(paths.base, 'data')
+    paths.data = os.path.join(paths.base, 'dataset')
     paths.output = os.path.join(os.getcwd(), 'output', conf_name)
     paths.weights = os.path.join(paths.output, result_dir, 'weights')
     paths.logs = os.path.join(paths.output, result_dir, 'log')

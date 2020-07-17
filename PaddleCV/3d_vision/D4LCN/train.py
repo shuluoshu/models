@@ -291,7 +291,7 @@ def train():
                     if conf.test_protocol.lower() == 'kitti':
                         results_path = os.path.join(results_path, 'data')
                         mkdir_if_missing(results_path, delete_if_exist=True)
-                        test_kitti_3d(conf.dataset_test, train_model, conf, results_path, paths.data)
+                        test_kitti_3d(conf.dataset_test, "validation", train_model, conf, results_path, paths.data)
                     train_model.phase = "train"
                     train_model.train()
 

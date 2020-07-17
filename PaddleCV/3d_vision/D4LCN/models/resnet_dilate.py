@@ -315,10 +315,10 @@ class RPN(fluid.dygraph.Layer):
         
         self.feat_stride = conf.feat_stride
 
-        if self.phase != "train":
-            self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
-            self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride)
-            self.anchors = conf.anchors
+        
+        self.feat_size = calc_output_size(np.array(conf.crop_size), self.feat_stride)
+        self.rois = locate_anchors(conf.anchors, self.feat_size, conf.feat_stride)
+        self.anchors = conf.anchors
 
     def forward(self, x, depth):
         batch_size = x.shape[0]
