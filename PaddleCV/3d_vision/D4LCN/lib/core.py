@@ -69,7 +69,108 @@ class MyPolynomialDecay(fluid.dygraph.PolynomialDecay):
         
         return decay_lr
 
-               
+
+class MyOneCycleDecay(fluid.dygraph.learning_rate_scheduler.LearningRateDecay):
+    def __init__(self,
+                 learning_rate,
+                 total_step,
+                 div_factor=25,
+                 final_div_factor=1e-4,
+                 pct_start=0.3):
+        super(MyOneCycleDecay, self).__init__()
+        self.learning_rate = learning_rate
+        self.total_step = total_step
+        self.div_factor = div_factor
+        self.final_div_factor = final_div_factor
+        self.pct_start = pct_start
+
+    def step(self):
+        def annealing_cos(start, end, pct):
+            "Cosine anneal from `start` to `end` as pct goes from 0.0 to 1.0."
+            cos_out = fluid.layers.cos(pct * np.pi) + 1.
+            return cos_out * (start - end) / 2. + end
+        
+        warmup_start_lr = self.learning_rate / self.div_factor
+        decay_end_lr = self.learning_rate / self.final_div_factor
+        warmup_step = float(self.total_step * self.pct_start) - 1.
+        decay_step = float(self.total_step - warmup_step) - 1.
+        
+        #global_step = _decay_step_counter()
+        global_step = self.step_num
+        
+        lr = fluid.layers.create_global_var(
+            shape=[1],
+            value=float(self.learning_rate),
+            dtype='float32',
+            persistable=True,
+            name="learning_rate")
+        
+        warmup_step_var = fluid.layers.fill_constant(
+            shape=[1], dtype='float32', value=float(warmup_step), force_cpu=True)
+        decay_step_var = fluid.layers.fill_constant(
+            shape=[1], dtype='float32', value=float(decay_step), force_cpu=True)
+        
+        warmup_pred = global_step <= warmup_step_var
+        decay_pred = global_step > warmup_step_var
+        
+        # learning rate warmup and decay
+        def warmup_lr():
+            return annealing_cos(warmup_start_lr, self.learning_rate,
+                                 global_step / warmup_step_var)
+        def decay_lr():
+            return annealing_cos(self.learning_rate, decay_end_lr,
+                                (global_step - warmup_step_var) / decay_step_var)
+        
+        lr = fluid.layers.case(pred_fn_pairs=[(warmup_pred, warmup_lr),
+                                              (decay_pred, decay_lr)])
+        
+        
+        return lr
+
+
+def cosine_onecycle(learning_rate, total_step, div_factor=25, final_div_factor=1e4, pct_start=0.3):
+    def annealing_cos(start, end, pct):
+        "Cosine anneal from `start` to `end` as pct goes from 0.0 to 1.0."
+        cos_out = fluid.layers.cos(pct * np.pi) + 1.
+        return cos_out * (start - end) / 2. + end
+    
+    warmup_start_lr = learning_rate / div_factor
+    decay_end_lr = learning_rate / final_div_factor
+    warmup_step = float(total_step * pct_start) - 1.
+    decay_step = float(total_step - warmup_step) - 1.
+    
+    global_step = _decay_step_counter()
+    print("global_step: ", global_step)
+    
+    lr = fluid.layers.create_global_var(
+        shape=[1],
+        value=float(learning_rate),
+        dtype='float32',
+        persistable=True,
+        name="learning_rate")
+    
+    warmup_step_var = fluid.layers.fill_constant(
+        shape=[1], dtype='float32', value=float(warmup_step), force_cpu=True)
+    decay_step_var = fluid.layers.fill_constant(
+        shape=[1], dtype='float32', value=float(decay_step), force_cpu=True)
+    
+    warmup_pred = global_step <= warmup_step_var
+    decay_pred = global_step > warmup_step_var
+    
+    # learning rate warmup and decay
+    def warmup_lr():
+        return annealing_cos(warmup_start_lr, learning_rate,
+                             global_step / warmup_step_var)
+    def decay_lr():
+        return annealing_cos(learning_rate, decay_end_lr,
+                            (global_step - warmup_step_var) / decay_step_var)
+    
+    lr = fluid.layers.case(pred_fn_pairs=[(warmup_pred, warmup_lr),
+                                          (decay_pred, decay_lr)])
+    
+    
+    return float(lr.numpy()[0])
+
 def adjust_lr(conf): # TODO onecycle
     
 
@@ -127,7 +228,9 @@ def adjust_lr(conf): # TODO onecycle
         #     lr_weight = (1 - step_count / scale) ** power
         #     for gind, g in enumerate(optimizer.param_groups):
         #         g['lr'] = g['lr'] * lr_weight
-                
+        elif lr_policy.lower() == 'onecycle':
+
+            lr = MyOneCycleDecay(lr, max_iter)     
 
         else:
             raise ValueError('{} lr_policy not understood'.format(lr_policy))
@@ -634,7 +737,7 @@ def compute_stats(tracker, stats):
 #     return iterator, images, imobjs
 
 
-def init_training_paths(conf_name, result_dir, use_tmp_folder=None): #TODO
+def init_training_paths(conf_name, result_dir, save_dir, use_tmp_folder=None): #TODO
     """
     Simple function to store and create the relevant paths for the project,
     based on the base = current_working_dir (cwd). For this reason, we expect
@@ -654,7 +757,7 @@ def init_training_paths(conf_name, result_dir, use_tmp_folder=None): #TODO
     paths = edict()
     paths.base = os.getcwd()
     paths.data = os.path.join(paths.base, 'dataset')
-    paths.output = os.path.join(os.getcwd(), 'output', conf_name)
+    paths.output = os.path.join(os.getcwd(), save_dir, conf_name)
     paths.weights = os.path.join(paths.output, result_dir, 'weights')
     paths.logs = os.path.join(paths.output, result_dir, 'log')
 

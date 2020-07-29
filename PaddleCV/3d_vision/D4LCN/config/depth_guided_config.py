@@ -19,9 +19,9 @@ def Config():
     conf.dropout_rate = 0.5
     conf.dropout_position = 'early'  # 'early'  'late' 'adaptive'
     conf.do_test = True
-    conf.lr_policy = 'poly'  # 'onecycle'  # 'cosinePoly'  # 'cosineRestart'  # 'poly'
+    conf.lr_policy = 'onecycle'  # 'onecycle'  # 'cosinePoly'  # 'cosineRestart'  # 'poly'
     conf.restart_iters = 5000
-    conf.batch_size = 2 * 4
+    conf.batch_size = 2
     conf.base_model = 50
     conf.depth_channel = 1
     conf.adaptive_diated = True
@@ -47,7 +47,7 @@ def Config():
     conf.weight_decay = 0.0005
 
     conf.snapshot_iter = 5000
-    conf.display = 50
+    conf.display = 20
 
 
     
@@ -175,7 +175,7 @@ def Config():
     # visdom
     conf.visdom_port = 9891
 
-    conf.pretrained = "pretrained_model/resnet50.pdparams"
+    conf.pretrained = "pretrained_model/pytorch_init.pdparams"
 
     return conf
 

@@ -91,14 +91,14 @@ def test():
         # training network
         src_path = os.path.join('.', 'models', conf.model + '.py')
         train_model = absolute_import(src_path)
-        train_model = train_model.build(conf, args.backbone, 'train')
+        train_model = train_model.build(conf, 'train')
         train_model.eval()
         train_model.phase = "eval"
         Already_trained, _ = fluid.load_dygraph(args.weights_path)
         print("loaded model from ", args.weights_path)
         train_model.set_dict(Already_trained)#, use_structured_name=True)
         print("start evaluation...")
-        test_kitti_3d(conf.dataset_test, train_model, conf, results_path, args.data_dir)
+        test_kitti_3d(conf.dataset_test, 'validation', train_model, conf, results_path, args.data_dir)
     print("Evaluation Finished!")
 
 

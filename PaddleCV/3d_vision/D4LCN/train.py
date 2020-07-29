@@ -118,7 +118,7 @@ def train():
 
     # conf init
     conf = core.init_config(args.conf)
-    paths = core.init_training_paths(args.conf, conf.result_dir)
+    paths = core.init_training_paths(args.conf, conf.result_dir, args.save_dir)
     tracker = edict()
     start_iter = 0
     start_time = time.time()
@@ -140,6 +140,8 @@ def train():
     # # train
     place = fluid.CUDAPlace(fluid.dygraph.parallel.Env().dev_id) \
         if args.use_data_parallel else fluid.CUDAPlace(0)
+    save_parameters = (not args.use_data_parallel) or (
+           args.use_data_parallel and fluid.dygraph.parallel.Env().local_rank == 0)
 
     with fluid.dygraph.guard(place):
         if args.ce:
@@ -277,7 +279,7 @@ def train():
 
                 # snapshot, do_test
 
-                if iteration % conf.snapshot_iter == 0 and iteration > start_iter:
+                if (iteration % conf.snapshot_iter == 0 and iteration > start_iter) and save_parameters:
                     fluid.save_dygraph(train_model.state_dict(),
                                         '{}/iter{}_params'.format(paths.weights, iteration))
                     fluid.save_dygraph(optimizer.state_dict(),

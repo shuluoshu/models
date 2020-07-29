@@ -281,10 +281,11 @@ class D4lcnReader(object):
             # imgs_idxs = np.arange(imgs)
             for ind in idxs:
                 augmented_img, depth, im_obj = self._augmented_single(ind) 
-                batch_out.append([augmented_img, depth, im_obj]) 
-                if len(batch_out) == batch_size:
-                    yield batch_out
-                    batch_out = []
+                yield [augmented_img, depth, im_obj]
+                #batch_out.append([augmented_img, depth, im_obj]) 
+                #if len(batch_out) == batch_size:
+                #    yield batch_out
+                #    batch_out = []
 
         return reader
 
