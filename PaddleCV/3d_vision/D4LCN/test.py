@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args():
     """parse"""
-    parser = argparse.ArgumentParser("M3D-RPN train script")
+    parser = argparse.ArgumentParser("D4LCN script")
     parser.add_argument(
         "--conf_path",
         type=str,
@@ -60,8 +60,8 @@ def parse_args():
     parser.add_argument(
         '--backbone',
         type=str,
-        default='DenseNet121',
-        help='backbone model to train, default DenseNet121')
+        default='ResNet50',
+        help='backbone model to train, default ResNet50')
 
     parser.add_argument(
         '--data_dir',

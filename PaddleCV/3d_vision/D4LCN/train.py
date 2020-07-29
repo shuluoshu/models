@@ -123,8 +123,6 @@ def train():
     start_iter = 0
     start_time = time.time()
 
-    # data_dir = '/home/lihanyu/baidu/adu-lab/D4LCN/data'
-    # d4lcn_reader = D4lcnReader(conf, data_dir)
     # get reader and anchor
     d4lcn_reader = D4lcnReader(conf, args.data_dir)
     epoch = (conf.max_iter / (d4lcn_reader.len / conf.batch_size)) + 1

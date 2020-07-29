@@ -111,8 +111,48 @@ class D4lcnReader(object):
 
                     gts = read_kitti_label(annpath, p2, self.use_3d_for_2d)
 
+                    if not self.affine_size is None:
+                        # filter relevant classes
+                        gts_plane = [deepcopy(gt) for gt in gts if gt.cls in conf.lbls and not gt.ign]
+
+                        if len(gts_plane) > 0:
+
+                            KITTI_H = 1.65
+
+                            # compute ray traces for default projection
+                            for gtind in range(len(gts_plane)):
+                                gt = gts_plane[gtind]
+
+                                #cx2d = gt.bbox_3d[0]
+                                #cy2d = gt.bbox_3d[1]
+                                # bbox_full: [x, y, width, height]
+                                cy2d = gt.bbox_full[1] + gt.bbox_full[3]
+                                cx2d = gt.bbox_full[0] + gt.bbox_full[2] / 2
+
+                                z2d, coord3d = projection_ray_trace(p2, p2_inv, cx2d, cy2d, KITTI_H)
+
+                                gts_plane[gtind].center_in = coord3d[0:3, 0]
+                                gts_plane[gtind].center_3d = np.array(gt.center_3d)
+
+
+                            prelim_tra = np.array([gt.center_in for gtind, gt in enumerate(gts_plane)])
+                            target_tra = np.array([gt.center_3d for gtind, gt in enumerate(gts_plane)])
+
+                            if self.affine_size == 4:
+                                prelim_tra = np.pad(prelim_tra, [(0, 0), (0, 1)], mode='constant', constant_values=1)
+                                target_tra = np.pad(target_tra, [(0, 0), (0, 1)], mode='constant', constant_values=1)
+
+                            affine_gt, err = solve_transform(prelim_tra, target_tra, compute_error=True)
+
                     # obj = {}#每个object
                     obj = edict()
+
+                    # did not compute transformer
+                    if (self.affine_size is None) or len(gts_plane) < 1:
+                        obj.affine_gt = None
+                    else:
+                        obj.affine_gt = affine_gt
+
                     # store gts
                     obj.id = id
                     obj.gts = gts
@@ -123,6 +163,7 @@ class D4lcnReader(object):
                     im = Image.open(impath)
                     obj.path = impath
                     obj.path_depth = depthpath
+                    obj.path_seg = segpath
                     obj.path_pre = impath_pre
                     obj.path_pre2 = impath_pre2
                     obj.path_pre3 = impath_pre3
@@ -133,21 +174,7 @@ class D4lcnReader(object):
                     obj.scale = db.scale
                     obj.dbind = dbind
 
-                    # obj['id'] = id
-                    # obj['gts'] = gts
-                    # obj['p2'] = p2
-                    # obj['p2_inv'] = p2_inv
-                    obj.affine_gt = None# did not compute transformer
-                    # # im properties
-                    # im = Image.open(impath)
-                    # obj['path'] = impath
-                    # obj['path_pre'] = impath_pre
-                    # obj['path_pre2'] = impath_pre2
-                    # obj['path_pre3'] = impath_pre3
-                    # obj['imW'], obj['imH'] = im.size
-                    # obj['dbname'] = db.name
-                    # obj['scale'] = db.scale
-                    # obj['dbind'] = dbind
+                    #obj.affine_gt = None# did not compute transformer
 
                     # store
                     imdb_single_db.append(obj)
@@ -158,24 +185,22 @@ class D4lcnReader(object):
 
             # concatenate single imdb into full imdb
             #pdb.set_trace()
-            '''
-            imdb += imdb_single_db
-
-        self.data = {}
-        self.data['train'] = {}
-        self.data['train']['imgs'] = points[train_idxs, ...]
-        self.data['train']['labels'] = labels[train_idxs, ...]
-        self.data['test'] = {}
-        self.data['test']['points'] = points[test_idxs, ...]
-        self.data['test']['labels'] = labels[test_idxs, ...]
-        logger.info("Load data finished")
-        '''
         self.data = {}
         self.data['train'] = imdb_single_db
         self.data['test'] = {}
         self.len = len(imdb_single_db)
         self.sampled_weights = balance_samples(self.conf, imdb_single_db)
         
+        # check classes
+        cls_not_used = []
+        for imobj in imdb_single_db:
+            for gt in imobj.gts:
+                cls = gt.cls
+                if not(cls in self.conf.lbls or cls in self.conf.ilbls) and (cls not in cls_not_used):
+                    cls_not_used.append(cls)
+
+        if len(cls_not_used) > 0:
+            logging.info('Labels not used in training.. {}'.format(cls_not_used))
 
 
     def _augmented_single(self, index):
@@ -242,7 +267,10 @@ class D4lcnReader(object):
                     im_pre3 = cv2.resize(im_pre3, (im.shape[1], im.shape[0]))
 
                 im = np.concatenate((im, im_pre3), axis=2)
-
+        if not self.use_rcnn_pretrain:
+            for i in range(int(im.shape[2]/3)):
+                # convert to RGB then permute to be [B C H W]
+                im[:, :, (i*3):(i*3) + 3] = im[:, :, (i*3+2, i*3+1, i*3)]
         # transform / data augmentation
         im, depth, imobj = self.transform(im, depth, deepcopy(self.data['train'][index]))
 
@@ -520,7 +548,7 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
             # actually center the box
             cy3d -= (h3d / 2)
 
-            elevation = (1.65 - cy3d)
+            elevation = (1.65 - cy3d) #height above sea level 
 
             if use_3d_for_2d and h3d > 0 and w3d > 0 and l3d > 0:
 
@@ -540,6 +568,8 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
                     width = x2 - x + 1
                     height = y2 - y + 1
 
+            else:
+                verts3d, corners_3d = np.zeros((8, 2)), np.zeros((3, 8))
             # project cx, cy, cz
             coord3d = p2.dot(np.array([cx3d, cy3d, cz3d, 1]))
 
@@ -548,6 +578,7 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
             cy3d_2d = coord3d[1]
             cz3d_2d = coord3d[2]
 
+            # 3d center to 2d, image coordinate
             cx = cx3d_2d / cz3d_2d
             cy = cy3d_2d / cz3d_2d
 
@@ -585,6 +616,8 @@ def read_kitti_label(file, p2, use_3d_for_2d=False):
             obj.bbox_3d = [cx, cy, cz3d_2d, w3d, h3d, l3d, alpha, cx3d, cy3d, cz3d, rotY]
             obj.center_3d = [cx3d, cy3d, cz3d]
 
+            obj.vertices = verts3d[:8].T.flatten()
+            obj.corners_3d = corners_3d.flatten()
             gts.append(obj)
 
     text_file.close()
