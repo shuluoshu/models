@@ -75,7 +75,7 @@ class MyOneCycleDecay(fluid.dygraph.learning_rate_scheduler.LearningRateDecay):
                  learning_rate,
                  total_step,
                  div_factor=25,
-                 final_div_factor=1e-4,
+                 final_div_factor=1e4,
                  pct_start=0.3):
         super(MyOneCycleDecay, self).__init__()
         self.learning_rate = learning_rate
@@ -91,41 +91,39 @@ class MyOneCycleDecay(fluid.dygraph.learning_rate_scheduler.LearningRateDecay):
             return cos_out * (start - end) / 2. + end
         
         warmup_start_lr = self.learning_rate / self.div_factor
-        decay_end_lr = self.learning_rate / self.final_div_factor
+        decay_end_lr = warmup_start_lr / self.final_div_factor
         warmup_step = float(self.total_step * self.pct_start) - 1.
         decay_step = float(self.total_step - warmup_step) - 1.
         
         #global_step = _decay_step_counter()
         global_step = self.step_num
         
-        lr = fluid.layers.create_global_var(
-            shape=[1],
-            value=float(self.learning_rate),
-            dtype='float32',
-            persistable=True,
-            name="learning_rate")
-        
         warmup_step_var = fluid.layers.fill_constant(
             shape=[1], dtype='float32', value=float(warmup_step), force_cpu=True)
         decay_step_var = fluid.layers.fill_constant(
             shape=[1], dtype='float32', value=float(decay_step), force_cpu=True)
         
-        warmup_pred = global_step <= warmup_step_var
-        decay_pred = global_step > warmup_step_var
-        
-        # learning rate warmup and decay
-        def warmup_lr():
+        if self.step_num <= warmup_step:
+            #warmup_lr()
             return annealing_cos(warmup_start_lr, self.learning_rate,
-                                 global_step / warmup_step_var)
-        def decay_lr():
+                                 self.step_num / warmup_step_var)
+        elif self.step_num > warmup_step:
+            #decay_lr()
             return annealing_cos(self.learning_rate, decay_end_lr,
-                                (global_step - warmup_step_var) / decay_step_var)
+                                 (self.step_num - warmup_step_var) / decay_step_var)
         
-        lr = fluid.layers.case(pred_fn_pairs=[(warmup_pred, warmup_lr),
-                                              (decay_pred, decay_lr)])
-        
-        
-        return lr
+def momentum_decay(cur_step, total_steps, max_momentum=0.95, base_momentum=0.85, pct_start=0.3):
+    def annealing_cos(start, end, pct):
+        cos_out = math.cos(math.pi * pct) + 1
+        return end + (start - end) / 2.0 * cos_out
+    
+    warmup_step = float(total_steps * pct_start) - 1.
+    decay_step = float(total_steps - warmup_step) - 1.
+
+    if cur_step <= warmup_step:
+        return annealing_cos(max_momentum, base_momentum, cur_step / warmup_step)
+    else:
+        return annealing_cos(base_momentum, max_momentum, (cur_step - warmup_step) / decay_step)
 
 
 def cosine_onecycle(learning_rate, total_step, div_factor=25, final_div_factor=1e4, pct_start=0.3):
